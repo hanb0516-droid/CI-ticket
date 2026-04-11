@@ -3,18 +3,22 @@ import random
 from datetime import datetime, timedelta
 from itertools import product
 import requests
+import time # 新增時間套件來當作「煞車」
 
 # --- 隱藏網頁元素 ---
 st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
 
-# --- 核心資料抓取與計算 (升級照妖鏡版) ---
+# 🌟 新增快取記憶：相同的航段與日期，一小時內只抓一次，大幅節省 API 額度與連線時間！
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_base_flight_data(origin, dest, date, cabin_class):
+    # 煞車機制：每次真的去敲 API 門的時候，停頓 0.8 秒，避免被當成惡意攻擊
+    time.sleep(0.8)
+    
     api_key = "dce25cdb5amshe2e8ea332763a58p1ca56ajsna52ab815ea5a"
     url = "https://skyscanner-flights-travel-api.p.rapidapi.com/searchFlights"
     
     cabin_mapping = {"經濟艙": "economy", "豪經艙": "premiumeconomy", "商務艙": "business"}
     
-    # 加入 carrier: CI 嘗試過濾華航
     params = {
         "origin": origin, "destination": dest, "date": date, 
         "adults": "1", "currency": "TWD", "cabinClass": cabin_mapping[cabin_class],
@@ -24,7 +28,7 @@ def fetch_base_flight_data(origin, dest, date, cabin_class):
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
-        response.raise_for_status() # 檢查是否被 API 伺服器阻擋 (如 429 頻率過高)
+        response.raise_for_status() 
         data = response.json()
         
         real_price = data['data']['flights'][0]['price']
@@ -32,16 +36,14 @@ def fetch_base_flight_data(origin, dest, date, cabin_class):
         return {"base_price": int(real_price), "miles": miles, "status": "✅ API 即時報價"}
         
     except Exception as e:
-        # 照妖鏡機制：捕捉確切的錯誤原因
         err_msg = str(e)
         if "429" in err_msg:
-            reason = "API免費額度限制"
+            reason = "API免費額度限制或頻率過高"
         elif "400" in err_msg or "KeyError" in str(type(e)) or "IndexError" in str(type(e)):
-            reason = "無華航直飛或格式異常"
+            reason = "無華航直飛或查無此班機"
         else:
             reason = "連線超時"
 
-        # 模擬備案
         multiplier = 1 if cabin_class == "經濟艙" else (1.8 if cabin_class == "豪經艙" else 3.5)
         long_haul_price = random.randint(18000, 25000) * multiplier
         short_haul_price = random.randint(3500, 7000) * multiplier
@@ -62,17 +64,13 @@ st.subheader("🗓️ 行程與艙等設定")
 c_dest1, c_dest2 = st.columns(2)
 with c_dest1:
     out_dest = st.text_input("長程去程終點", value="PRG")
-    # 預設去程日期改為 2026/06/11
     date_out = st.date_input("去程日期", value=datetime(2026, 6, 11))
 with c_dest2:
-    # 預設回程起點改為 FRA
     in_origin = st.text_input("長程回程起點", value="FRA")
-    # 預設回程日期改為 2026/06/25
     date_in = st.date_input("回程日期", value=datetime(2026, 6, 25))
 
 cabin_choice = st.selectbox("💺 選擇艙等", ["經濟艙", "豪經艙", "商務艙"])
 
-# 標題改為「旅行成員」
 st.subheader("👥 旅行成員")
 c1, c2, c3 = st.columns(3)
 with c1: adults = st.number_input("大人", value=2, min_value=1)
@@ -80,7 +78,7 @@ with c2: children = st.number_input("兒童", value=1, min_value=0)
 with c3: infants = st.number_input("嬰兒", value=1, min_value=0)
 
 if st.button("🔍 開始即時票價精算", use_container_width=True):
-    with st.spinner(f'正在連線 Skyscanner 抓取【{cabin_choice}】真實票價...'):
+    with st.spinner(f'正在聰明地連線 Skyscanner 抓取【{cabin_choice}】真實票價... (初次搜尋約需 10~15 秒)'):
         outstations = ["FUK", "KUL", "BKK", "MNL"]
         results = []
         strategies = [{"name": "完美中轉", "d1": -1, "d4": 1}, {"name": "前後拆分旅行", "d1": -45, "d4": 45}]
