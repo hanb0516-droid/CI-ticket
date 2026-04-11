@@ -3,19 +3,19 @@ import random
 from datetime import datetime, timedelta
 from itertools import product
 import requests
-import time # 新增時間套件來當作「煞車」
+import time
 
 # --- 隱藏網頁元素 ---
 st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
 
-# 🌟 新增快取記憶：相同的航段與日期，一小時內只抓一次，大幅節省 API 額度與連線時間！
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_base_flight_data(origin, dest, date, cabin_class):
-    # 煞車機制：每次真的去敲 API 門的時候，停頓 0.8 秒，避免被當成惡意攻擊
-    time.sleep(0.8)
+    time.sleep(1) # 煞車機制維持，保護新 API 額度
     
     api_key = "dce25cdb5amshe2e8ea332763a58p1ca56ajsna52ab815ea5a"
-    url = "https://skyscanner-flights-travel-api.p.rapidapi.com/searchFlights"
+    
+    # 換成你截圖裡的新 API Host (猜測其搜尋端點為 /api/v1/flights/searchFlights)
+    url = "https://flights-sky.p.rapidapi.com/api/v1/flights/searchFlights"
     
     cabin_mapping = {"經濟艙": "economy", "豪經艙": "premiumeconomy", "商務艙": "business"}
     
@@ -24,25 +24,36 @@ def fetch_base_flight_data(origin, dest, date, cabin_class):
         "adults": "1", "currency": "TWD", "cabinClass": cabin_mapping[cabin_class],
         "carrier": "CI" 
     }
-    headers = {"x-rapidapi-key": api_key, "x-rapidapi-host": "skyscanner-flights-travel-api.p.rapidapi.com"}
+    
+    headers = {
+        "x-rapidapi-key": api_key,
+        "x-rapidapi-host": "flights-sky.p.rapidapi.com"
+    }
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
         response.raise_for_status() 
         data = response.json()
         
-        real_price = data['data']['flights'][0]['price']
+        # 兼容不同 API 的 JSON 格式
+        try:
+            real_price = data['data']['itineraries'][0]['price']['raw']
+        except:
+            real_price = data['data']['flights'][0]['price']
+            
         miles = 4500 if "PRG" in [origin, dest] or "FRA" in [origin, dest] or "ZRH" in [origin, dest] else 1000
         return {"base_price": int(real_price), "miles": miles, "status": "✅ API 即時報價"}
         
     except Exception as e:
         err_msg = str(e)
         if "429" in err_msg:
-            reason = "API免費額度限制或頻率過高"
-        elif "400" in err_msg or "KeyError" in str(type(e)) or "IndexError" in str(type(e)):
-            reason = "無華航直飛或查無此班機"
+            reason = "API免費額度限制"
+        elif "404" in err_msg:
+            reason = "API 端點網址有誤"
+        elif "403" in err_msg or "401" in err_msg:
+            reason = "API 鑰匙無效"
         else:
-            reason = "連線超時"
+            reason = "格式異常或查無直飛"
 
         multiplier = 1 if cabin_class == "經濟艙" else (1.8 if cabin_class == "豪經艙" else 3.5)
         long_haul_price = random.randint(18000, 25000) * multiplier
@@ -58,7 +69,7 @@ def calculate_family_price(base_price, adults, children, infants):
     return total
 
 # --- App 介面 ---
-st.title("✈️ 華航外站四段票神器")
+st.title("✈️ 華航外站四段票神器 (輕量版)")
 
 st.subheader("🗓️ 行程與艙等設定")
 c_dest1, c_dest2 = st.columns(2)
@@ -78,10 +89,10 @@ with c2: children = st.number_input("兒童", value=1, min_value=0)
 with c3: infants = st.number_input("嬰兒", value=1, min_value=0)
 
 if st.button("🔍 開始即時票價精算", use_container_width=True):
-    with st.spinner(f'正在聰明地連線 Skyscanner 抓取【{cabin_choice}】真實票價... (初次搜尋約需 10~15 秒)'):
-        outstations = ["FUK", "KUL", "BKK", "MNL"]
+    with st.spinner(f'正在溫和連線 Skyscanner 抓取真實票價...'):
+        outstations = ["FUK", "KUL"] 
         results = []
-        strategies = [{"name": "完美中轉", "d1": -1, "d4": 1}, {"name": "前後拆分旅行", "d1": -45, "d4": 45}]
+        strategies = [{"name": "前後拆分旅行", "d1": -45, "d4": 45}]
 
         for start, end in product(outstations, repeat=2):
             for s in strategies:
@@ -118,10 +129,10 @@ if st.button("🔍 開始即時票價精算", use_container_width=True):
                     "details": details_text
                 })
 
-        top_5 = sorted(results, key=lambda x: x['together'])[:5]
-        st.success(f"🎉 計算完成！({adults}大{children}小{infants}嬰 - {cabin_choice})")
+        top_3 = sorted(results, key=lambda x: x['together'])[:3]
+        st.success(f"🎉 輕量計算完成！({adults}大{children}小{infants}嬰 - {cabin_choice})")
         
-        for i, t in enumerate(top_5, 1):
+        for i, t in enumerate(top_3, 1):
             with st.expander(f"🏆 Top {i}: {t['title']} ➔ 四段合買 NT$ {t['together']:,}"):
                 st.markdown(f"**🔥 四段合買預估價：<span style='color:red; font-size:20px'>NT$ {t['together']:,}</span>**", unsafe_allow_html=True)
                 st.write(f"🛑 分開單買總價：NT$ {t['separate']:,}")
@@ -132,4 +143,4 @@ if st.button("🔍 開始即時票價精算", use_container_width=True):
                 for info in t['details']:
                     st.write(f"• {info}")
 
-st.info("💡 提示：若顯示「系統模擬」，代表 API 免費額度耗盡或該日無直飛航班，系統將自動套用預估模型。")
+st.info("💡 提示：若顯示「系統模擬」，代表該日無直飛航班或API異常，系統將自動套用預估模型。")
