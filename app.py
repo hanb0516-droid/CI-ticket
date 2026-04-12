@@ -77,7 +77,7 @@ def fetch_asia_outer_legs(origin, dest, date, cabin_class):
     headers = {"x-rapidapi-key": api_key, "x-rapidapi-host": "flights-sky.p.rapidapi.com"}
 
     try:
-        time.sleep(0.5) # 放慢腳步避免被擋
+        time.sleep(0.5) 
         response = requests.get(url, headers=headers, params=params, timeout=12)
         if response.status_code == 429:
             return {"base_price": 0, "status": "❌ API額度耗盡", "info": ""}
@@ -161,10 +161,10 @@ if st.button("🚀 啟動黃金樞紐交叉比對", use_container_width=True):
             if "額度耗盡" in europe_main['status']:
                 st.error("🚨 警告：您的 API 呼叫額度可能已經用盡，請至 RapidAPI 確認您的訂閱狀態！")
             else:
-                st.error(f"⚠️ 歐洲主幹段查無純華航機票！(可能是商務艙該日已售罄)")
+                st.error(f"⚠️ 歐洲主幹段查無純華航機票！(可能是【{cabin_choice}】該日已售罄)")
         else:
             europe_total_price = europe_main['total_price']
-            st.info(f"🌸 已鎖定華航歐洲長程真實總價：**NT$ {europe_total_price:,}**。")
+            st.info(f"🌸 已鎖定華航歐洲長程【{cabin_choice}】真實總價：**NT$ {europe_total_price:,}**。")
             
             d1_date = (date_out - timedelta(days=45)).strftime("%Y-%m-%d")
             d4_date = (date_in + timedelta(days=45)).strftime("%Y-%m-%d")
@@ -225,16 +225,17 @@ if st.button("🚀 啟動黃金樞紐交叉比對", use_container_width=True):
 
                 if results:
                     top_results = sorted(results, key=lambda x: x['together'])[:10]
-                    st.success(f"🎉 交叉配對完成！為您淬鍊出絕對最便宜的前 10 種買法：")
+                    st.success(f"🎉 交叉配對完成！為您淬鍊出【{cabin_choice}】絕對最便宜的前 10 種買法：")
                     
                     for i, res in enumerate(top_results, 1):
                         with st.expander(f"🏆 第 {i} 名：{res['title']} ➔ 總結帳 NT$ {res['together']:,}"):
+                            st.markdown(f"**💺 計算基準：{cabin_choice}**")
                             st.markdown(f"**🔥 四段合買預估價：<span style='color:red; font-size:20px'>NT$ {res['together']:,}</span>**", unsafe_allow_html=True)
                             st.write(f"🛑 如果分開單買總價：NT$ {res['separate']:,}")
                             st.write(f"🤑 組合技為您省下：**NT$ {res['savings']:,}**")
                             st.markdown("---")
-                            st.markdown("**✈️ 實際航班明細 (保證華航)：**")
+                            st.markdown(f"**✈️ 實際航班明細 (保證華航 {cabin_choice})：**")
                             for info in res['details']:
                                 st.write(f"• {info}")
                 else:
-                    st.warning("查無合適的機票組合，可能該日期的班機已客滿。")
+                    st.warning(f"查無合適的機票組合，可能該日期的【{cabin_choice}】班機已客滿。")
