@@ -9,11 +9,11 @@ from itertools import product
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
-# 0. 企業級 UI 與金鑰設定
+# 0. 企業級 UI 與金鑰設定 (已修復最新版 Streamlit CSS 阻擋問題)
 # ==========================================
 st.set_page_config(page_title="Flight Actuary | 華航外站獵殺器", page_icon="✈️", layout="wide")
 
-# 注入自訂 CSS：打造專業毛玻璃與深色科技感背景
+# 🌟 終極視覺補丁：高空飛機虛化背景 + 毛玻璃卡片
 st.markdown("""
 <style>
     /* 隱藏預設選單與浮水印 */
@@ -21,31 +21,49 @@ st.markdown("""
     footer {visibility: hidden;} 
     header {visibility: hidden;}
     
-    /* 科技感漸層背景 */
-    .stApp {
-        background-color: #0e1117;
-        background-image: radial-gradient(circle at 50% 0%, #1e2a3a 0%, #090a0f 100%);
-        color: #e0e6ed;
+    /* 暴力覆蓋最新版 Streamlit 的背景容器：加入真實飛機雲層背景 + 深色漸層遮罩 */
+    [data-testid="stAppViewContainer"], .stApp {
+        background-image: linear-gradient(rgba(10, 15, 25, 0.85), rgba(10, 15, 25, 0.95)), url("https://images.unsplash.com/photo-1436491865332-7a61a109cc05?q=80&w=2074&auto=format&fit=crop");
+        background-size: cover !important;
+        background-position: center !important;
+        background-attachment: fixed !important;
     }
     
-    /* 讓 Expander 卡片變成毛玻璃質感 */
-    div[data-testid="stExpander"] {
-        background: rgba(255, 255, 255, 0.03) !important;
+    /* 讓 Expander 卡片變成真實的「毛玻璃 (Glassmorphism)」質感 */
+    [data-testid="stExpander"] {
+        background-color: rgba(255, 255, 255, 0.05) !important;
+        backdrop-filter: blur(12px) !important;
+        -webkit-backdrop-filter: blur(12px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
         border-radius: 12px !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        backdrop-filter: blur(10px);
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        margin-bottom: 10px;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3) !important;
+        margin-bottom: 12px;
     }
     
-    /* 標題漸層字體 */
+    /* 輸入框與選單的微調，融入背景 */
+    .stTextInput>div>div>input, .stSelectbox>div>div>div, .stDateInput>div>div>input, .stNumberInput>div>div>input {
+        background-color: rgba(255, 255, 255, 0.05) !important;
+        color: #ffffff !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+    }
+
+    /* 漸層標題，帶有發光效果 */
     .custom-title {
-        background: -webkit-linear-gradient(45deg, #4da8da, #00d2ff);
+        background: linear-gradient(45deg, #00d2ff, #3a7bd5);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        font-weight: 800;
-        font-size: 2.5rem;
-        margin-bottom: 0px;
+        font-weight: 900;
+        font-size: 2.8rem;
+        margin-bottom: -10px;
+        letter-spacing: 1px;
+    }
+    
+    /* 標題副標籤 */
+    .custom-subtitle {
+        color: #8da4c0;
+        font-size: 1.1rem;
+        font-weight: 500;
+        margin-bottom: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -91,7 +109,7 @@ def parse_booking_response(raw_data, title, d1, d4, strict_ci):
                     break
                 legs_summary.append(f"{carrier}{flight_num} | {dep_code} ➔ {arr_code} | {dep_time}")
 
-            if is_valid and len(legs_summary) == 4: # 嚴格檢查4段
+            if is_valid and len(legs_summary) == 4: 
                 price = offer.get('priceBreakdown', {}).get('total', {}).get('units', 0)
                 valid_results.append({"title": title, "total": price, "currency": "TWD", "legs": legs_summary, "d1": d1, "d4": d4})
         
@@ -134,7 +152,7 @@ def fetch_booking_bundle(legs, cabin, strict_ci, title="", d1="", d4="", debug_m
 # 2. UI 面板配置
 # ==========================================
 st.markdown('<p class="custom-title">✈️ Flight Actuary Console</p>', unsafe_allow_html=True)
-st.caption("中華航空 (CI) 外站四段聯程票・全亞洲動態精算雷達")
+st.markdown('<p class="custom-subtitle">中華航空 (CI) 外站四段聯程票・全亞洲動態精算雷達</p>', unsafe_allow_html=True)
 
 st.markdown("---")
 c_toggles = st.columns(2)
@@ -195,7 +213,6 @@ if st.button("🚀 啟動 Actuary 獵殺引擎", use_container_width=True):
         baseline_cache = {}
         out_combinations = list(product(d1_codes, d4_codes))
         
-        # 核心基準價查詢
         core_legs = [
             {"fromId": f"{d2_org}.AIRPORT", "toId": f"{d2_dst}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
             {"fromId": f"{d3_org}.AIRPORT", "toId": f"{d3_dst}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")}
@@ -203,7 +220,6 @@ if st.button("🚀 啟動 Actuary 獵殺引擎", use_container_width=True):
         res_core = fetch_booking_bundle(core_legs, cabin_choice, strict_ci=False)
         core_baseline_price = res_core.get("price", fallback_d2d3) if res_core["status"] == "success" else fallback_d2d3
         
-        # 智能跳車邏輯
         if len(out_combinations) > 10:
             msg_pre = st.info(f"⚡ 系統判定：您選擇了高達 {len(out_combinations)} 種外站組合！為保證系統穩定，已自動跳過耗時的獨立票價偵察，全面套用保底基準價。")
             for h1, h4 in out_combinations:
@@ -264,11 +280,9 @@ if st.button("🚀 啟動 Actuary 獵殺引擎", use_container_width=True):
                             else: error_count += 1
                         except Exception: error_count += 1
                         
-                        # 💣 防護閥：降低 UI 更新頻率，保證網頁不崩潰
                         if processed_count % 5 == 0 or processed_count == total_tasks:
                             pb.progress(processed_count / total_tasks, text=f"矩陣掃描中: {processed_count}/{total_tasks} (目前捕獲: {len(valid_results)} 組破盤價)")
                 
-                # 記憶體回收：只保留最便宜的前 100 名
                 valid_results.sort(key=lambda x: x['total'])
                 valid_results = valid_results[:100]
                 gc.collect()
@@ -284,7 +298,6 @@ if st.button("🚀 啟動 Actuary 獵殺引擎", use_container_width=True):
                     ref_price = r["dynamic_ref_price"]
                     diff = ref_price - r['total']
                     
-                    # UI 顏色與文案動態變更
                     if diff > 50000:
                         diff_badge = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,} TWD</span>"
                     elif diff > 0:
