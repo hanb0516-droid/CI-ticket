@@ -7,13 +7,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- 介面隱藏與設定 ---
-st.set_page_config(page_title="華航獵殺器 v11.0", layout="wide")
+st.set_page_config(page_title="華航獵殺器 v12.0", layout="wide")
 st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
 
 API_KEY = "dce25cdb5amshe2e8ea332763a58p1ca56ajsna52ab815ea5a"
 BASE_URL = "https://flights-sky.p.rapidapi.com"
 
-# 🛡️ 穩定型請求邏輯 (內建 2.2 秒強效冷卻)
+# 🛡️ 穩定型請求 (內建 2.5 秒強效冷卻)
 def stable_request(url, method="GET", params=None, json=None):
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "flights-sky.p.rapidapi.com", "Content-Type": "application/json"}
     for i in range(3):
@@ -33,7 +33,17 @@ def stable_request(url, method="GET", params=None, json=None):
             time.sleep(2)
     return None
 
-# 🌟 引擎 A：日曆探路 (自動校正過去日期)
+# 🌟 引擎 A：日期解析
+def get_safe_months(s_date, e_date):
+    ms = []
+    curr = s_date.replace(day=1)
+    while curr <= e_date:
+        ms.append(curr.strftime("%Y-%m"))
+        if curr.month == 12: curr = curr.replace(year=curr.year+1, month=1)
+        else: curr = curr.replace(month=curr.month+1)
+    return sorted(list(set(ms)))
+
+# 🌟 引擎 B：日曆探路 (自動校正過去日期)
 def scan_calendar(origin, dest, month_str, cabin, s_limit, e_limit):
     c_map = {"商務艙": "business", "豪經艙": "premiumeconomy", "經濟艙": "economy"}
     params = {"fromEntityId": origin, "toEntityId": dest, "departDate": month_str, "currency": "TWD", "cabinClass": c_map[cabin], "market": "US"}
@@ -51,7 +61,7 @@ def scan_calendar(origin, dest, month_str, cabin, s_limit, e_limit):
             except: continue
     return results
 
-# 🌟 引擎 B：真實聯程精算 (Married Segments 核心)
+# 🌟 引擎 C：真實四段聯程精算 ($2+4=5 核心邏輯)
 def fetch_bundle_price(h_in, d1, h_out, d4, d2_o, d2_d, d2_dt, d3_o, d3_d, d3_dt, cabin, adults):
     c_map = {"商務艙": "business", "豪經艙": "premiumeconomy", "經濟艙": "economy"}
     payload = {
@@ -78,7 +88,7 @@ def fetch_bundle_price(h_in, d1, h_out, d4, d2_o, d2_d, d2_dt, d3_o, d3_d, d3_dt
     return None
 
 # --- 主程式 ---
-st.title("✈️ 華航外站聯程獵殺器 v11.0 (終極電改版)")
+st.title("✈️ 華航外站聯程獵殺器 v12.0 (工業穩定版)")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -92,7 +102,7 @@ with col2:
 
 # 📅 日期邏輯自動對齊 (2026-04-12)
 today = date.today()
-d1_start = max(today + timedelta(days=1), (d2_dt - timedelta(days=65)).replace(day=1))
+d1_start = max(today + timedelta(days=1), (d2_dt - timedelta(days=62)).replace(day=1))
 d1_end = d2_dt
 d4_start = d3_dt
 m4, y4 = (d3_dt.month + 2, d3_dt.year) if d3_dt.month <= 10 else (d3_dt.month - 10, d3_dt.year + 1)
@@ -101,52 +111,44 @@ d4_end = date(y4, m4, last_d)
 
 st.success(f"📡 獵殺區間：D1({d1_start}~{d1_end}) | D4({d4_start}~{d4_end})")
 
-cabin = st.selectbox("💺 艙等", ["商務艙", "豪經艙", "經濟艙"])
+cabin_choice = st.selectbox("💺 艙等", ["商務艙", "豪經艙", "經濟艙"])
 adult_count = st.number_input("大人人數", value=1, min_value=1)
-selected_hubs = st.multiselect("📍 選擇掃描外站：", ["MNL", "BKK", "HKG", "KIX", "NRT", "ICN", "PUS", "SGN", "KUL", "FUK"], default=["MNL", "BKK", "KIX", "HKG"])
+selected_hubs = st.multiselect("📍 選擇掃描外站：", ["MNL", "BKK", "HKG", "KIX", "NRT", "ICN", "PUS", "SGN", "KUL", "FUK"], default=["MNL", "BKK", "KIX"])
 
-if st.button("🚀 啟動全自動獵殺", use_container_width=True):
+if st.button("🚀 啟動聯程獵殺", use_container_width=True):
     msg = st.empty()
-    debug = st.expander("🛠️ 診斷報告", expanded=True)
+    debug = st.expander("🛠️ 診斷日誌", expanded=True)
     
-    # 月份清單
-    def get_ms(s, e):
-        ms = []
-        curr = s.replace(day=1)
-        while curr <= e:
-            ms.append(curr.strftime("%Y-%m"))
-            curr = (curr + timedelta(days=32)).replace(day=1)
-        return list(set(ms))
-
-    d1_m, d4_m = get_ms(d1_start, d1_end), get_ms(d4_start, d4_end)
+    d1_m = get_safe_months(d1_start, d1_end)
+    d4_m = get_safe_months(d4_start, d4_end)
     d1_cands, d4_cands = [], []
 
-    # 1. 第一階段：日曆探路
+    # 1. 階段一：探路
     for hub in selected_hubs:
         msg.info(f"⚡ 正在探測 {hub}...")
-        for m in d1_m: d1_cands.extend(scan_calendar(hub, d2_o, m, cabin, d1_start, d1_end))
-        for m in d4_m: d4_cands.extend(scan_calendar(d3_d, hub, m, cabin, d4_start, d4_end))
+        for m in d1_m: d1_cands.extend(scan_calendar(hub, d2_o, m, cabin_choice, d1_start, d1_end))
+        for m in d4_m: d4_cands.extend(scan_calendar(d3_d, hub, m, cabin_choice, d4_start, d4_end))
     
-    # 🛡️ 補丁：如果雷達真的掃不到商務艙日曆，強制加入「理想斷點」日期測試
+    # 🛡️ 暴力補丁：如果雷達失效，強迫測試「黃金日期」
     if not d1_cands: d1_cands.append({"hub": "MNL", "day": d1_start, "price": 0})
     if not d4_cands: d4_cands.append({"hub": "MNL", "day": d4_end, "price": 0})
 
-    msg.warning("🔥 正在進行『四段聯程』總價打包精算...")
-    top_d1 = sorted(d1_cands, key=lambda x: x['price'])[:3]
-    top_d4 = sorted(d4_cands, key=lambda x: x['price'])[:3]
+    msg.warning("🔥 正在進行『四段打包』總價精算...")
+    top_d1 = sorted(d1_cands, key=lambda x: x['price'])[:2]
+    top_d4 = sorted(d4_cands, key=lambda x: x['price'])[:2]
     
     results = []
-    # 為了成功率，不併發，一個一個穩穩查
+    # 循序執行，保證不跳電
     for d1, d4 in product(top_d1, top_d4):
         debug.write(f"正在測試：{d1['hub']}({d1['day']}) ➔ {d4['hub']}({d4['day']})")
-        res = fetch_bundle_price(d1['hub'], d1['day'], d4['hub'], d4['day'], d2_o, d2_d, d2_dt, d3_o, d3_d, d3_dt, cabin, adult_count)
+        res = fetch_bundle_price(d1['hub'], d1['day'], d4['hub'], d4['day'], d2_o, d2_d, d2_dt, d3_o, d3_d, d3_dt, cabin_choice, adult_count)
         if res: results.append(res)
     
     msg.empty()
     if results:
-        st.success("🎉 獵殺成功！以下為 Married Segment 真實打包價：")
+        st.success("🎉 獵殺成功！以下為真實打包總價：")
         for r in sorted(results, key=lambda x: x['total'])[:10]:
             with st.expander(f"🏆 {r['title']} | {r['d1']} & {r['d4']} ➔ NT$ {r['total']:,}"):
                 for i, leg in enumerate(r['legs'], 1): st.write(f"{i}️⃣ {leg}")
     else:
-        st.error("❌ 獵殺失敗。可能是華航在這些組合下不給低價位，或 API 被封鎖。")
+        st.error("❌ 聯程精算失敗。代表這四段湊在一起時，華航目前不給低價組合，或 API 全面拒絕。")
