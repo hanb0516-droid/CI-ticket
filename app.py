@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ==========================================
 # 0. 介面與金鑰設定
 # ==========================================
-st.set_page_config(page_title="華航獵殺器 (動態精算版)", layout="wide")
+st.set_page_config(page_title="華航獵殺器 (智能防卡死版)", layout="wide")
 st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
 
 try:
@@ -54,7 +54,7 @@ def parse_booking_response(raw_data, title, d1, d4, strict_ci):
                     break
                 legs_summary.append(f"{carrier}{flight_num} | {dep_code} ➔ {arr_code} | {dep_time}")
 
-            if is_valid and len(legs_summary) == len(segments): # 確保每段都有解析到
+            if is_valid and len(legs_summary) == len(segments): 
                 price = offer.get('priceBreakdown', {}).get('total', {}).get('units', 0)
                 valid_results.append({"title": title, "total": price, "currency": "TWD", "legs": legs_summary, "d1": d1, "d4": d4})
         
@@ -66,7 +66,6 @@ def parse_booking_response(raw_data, title, d1, d4, strict_ci):
     return None
 
 def fetch_booking_bundle(legs, cabin, strict_ci, title="", d1="", d4="", debug_mode=False):
-    """通用型 API 請求函數 (可用於主掃描與前置偵察)"""
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": BOOKING_API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     c_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
@@ -77,10 +76,10 @@ def fetch_booking_bundle(legs, cabin, strict_ci, title="", d1="", d4="", debug_m
             res = requests.get(url, headers=headers, params=querystring, timeout=45)
             if res.status_code == 200:
                 raw_data = res.json()
-                if title: # 這是主掃描任務
+                if title: 
                     parsed_offer = parse_booking_response(raw_data, title, d1, d4, strict_ci)
                     return {"status": "success", "raw": raw_data if debug_mode else None, "offer": parsed_offer, "title": title}
-                else: # 這是前置偵察基準價任務
+                else: 
                     offers = raw_data.get('data', {}).get('flightOffers', [])
                     if offers:
                         return {"status": "success", "price": offers[0].get('priceBreakdown', {}).get('total', {}).get('units', 0)}
@@ -97,8 +96,8 @@ def fetch_booking_bundle(legs, cabin, strict_ci, title="", d1="", d4="", debug_m
 # ==========================================
 # 2. UI 面板
 # ==========================================
-st.title("✈️ 華航外站獵殺器 (動態精算版)")
-st.warning("⚠️ 系統將於背景自動查詢真實的分段機票行情，為您精算出最真實的價差！")
+st.title("✈️ 華航外站獵殺器 (智能防卡死版)")
+st.warning("⚠️ 系統具備智能跳車機制，當外站組合過多時，將自動跳過耗時的前置偵察，直接進入主掃描！")
 
 c_toggles = st.columns(2)
 with c_toggles[0]: strict_ci_toggle = st.checkbox("🔒 嚴格鎖定純華航 (CI) 航班", value=True)
@@ -117,10 +116,9 @@ with c_d3:
 
 st.markdown("---")
 st.markdown("#### 🎯 保底基準價設定 (Fallback)")
-st.caption("萬一 Booking.com 當天沒有該航線的報價，系統會使用以下您設定的金額來計算價差。")
 c_ref1, c_ref2 = st.columns(2)
-with c_ref1: fallback_d2d3 = st.number_input("保底 D2/D3 核心航段票價", value=185000, step=1000)
-with c_ref2: fallback_d1d4 = st.number_input("保底 D1/D4 外站航段票價", value=20000, step=1000)
+with c_ref1: fallback_d2d3 = st.number_input("保底 D2/D3 核心航段票價", value=175000, step=1000)
+with c_ref2: fallback_d1d4 = st.number_input("保底 D1/D4 外站航段票價", value=25000, step=1000)
 st.markdown("---")
 
 st.subheader("🌍 外站接駁掃描 (地毯式搜索)")
@@ -129,13 +127,13 @@ with c_d1:
     d1_regions = st.multiselect("🗂️ 批次全選 (D1)", ["全部", "東南亞", "東北亞", "港澳"], default=["東南亞"])
     d1_defaults = ALL_FORMATTED_CITIES if "全部" in d1_regions else [f"{c} ({n})" for r in d1_regions if r in CI_ASIAN_HUBS for c, n in CI_ASIAN_HUBS[r].items()]
     d1_hubs_raw = st.multiselect("📍 D1 出發外站", ALL_FORMATTED_CITIES, default=d1_defaults, key="d1_city")
-    d1_date_range = st.date_input("📅 D1 日期區間", value=(date(2026, 6, 8), date(2026, 6, 11)), key="d1_date")
+    d1_date_range = st.date_input("📅 D1 日期區間", value=(date(2026, 6, 10), date(2026, 6, 11)), key="d1_date")
 
 with c_d4:
     d4_regions = st.multiselect("🗂️ 批次全選 (D4)", ["全部", "東南亞", "東北亞", "港澳"], default=["東南亞"])
     d4_defaults = ALL_FORMATTED_CITIES if "全部" in d4_regions else [f"{c} ({n})" for r in d4_regions if r in CI_ASIAN_HUBS for c, n in CI_ASIAN_HUBS[r].items()]
     d4_hubs_raw = st.multiselect("📍 D4 抵達外站", ALL_FORMATTED_CITIES, default=d4_defaults, key="d4_city")
-    d4_date_range = st.date_input("📅 D4 日期區間", value=(date(2026, 6, 25), date(2026, 6, 28)), key="d4_date")
+    d4_date_range = st.date_input("📅 D4 日期區間", value=(date(2026, 6, 25), date(2026, 6, 26)), key="d4_date")
 
 c_cab, c_adt = st.columns(2)
 with c_cab: cabin_choice = st.selectbox("艙等", ["商務艙", "豪經艙", "經濟艙"])
@@ -150,37 +148,40 @@ if st.button("🚀 啟動 Booking.com 獵殺引擎", use_container_width=True):
     else:
         d1_dates = [d1_date_range[0] + timedelta(days=i) for i in range((d1_date_range[1]-d1_date_range[0]).days + 1)]
         d4_dates = [d4_date_range[0] + timedelta(days=i) for i in range((d4_date_range[1]-d4_date_range[0]).days + 1)]
-        
         d1_codes = [h.split(" ")[0] for h in d1_hubs_raw]
         d4_codes = [h.split(" ")[0] for h in d4_hubs_raw]
 
         # ---------------------------------------------------------
-        # 【階段一：前置偵察戰術 (抓取動態基準價)】
+        # 【階段一：前置偵察戰術 (智能防卡死版)】
         # ---------------------------------------------------------
-        msg_pre = st.info("🕵️‍♂️ 階段一：正在背景動態查詢分段機票行情，作為精算基準...")
         baseline_cache = {}
         
-        # 1. 查 D2/D3 核心票價
+        # 1. 查 D2/D3 核心票價 (只有一筆，照常查)
         core_legs = [
             {"fromId": f"{d2_org}.AIRPORT", "toId": f"{d2_dst}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
             {"fromId": f"{d3_org}.AIRPORT", "toId": f"{d3_dst}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")}
         ]
-        res_core = fetch_booking_bundle(core_legs, cabin_choice, strict_ci=False) # 基準價不鎖定航空，取最便宜
+        res_core = fetch_booking_bundle(core_legs, cabin_choice, strict_ci=False)
         core_baseline_price = res_core.get("price", fallback_d2d3) if res_core["status"] == "success" else fallback_d2d3
         
-        # 2. 查各組 D1/D4 外站票價 (取區間第一天作為代表日)
-        d1_rep = d1_dates[0].strftime("%Y-%m-%d")
-        d4_rep = d4_dates[0].strftime("%Y-%m-%d")
+        # 2. 判斷外站組合數量，啟動跳車機制
+        out_combinations = list(product(d1_codes, d4_codes))
         
-        for h1, h4 in product(d1_codes, d4_codes):
-            out_legs = [
-                {"fromId": f"{h1}.AIRPORT", "toId": "TPE.AIRPORT", "date": d1_rep},
-                {"fromId": "TPE.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4_rep}
-            ]
-            res_out = fetch_booking_bundle(out_legs, cabin_choice, strict_ci=False)
-            baseline_cache[f"{h1}_{h4}"] = res_out.get("price", fallback_d1d4) if res_out["status"] == "success" else fallback_d1d4
-            
-        msg_pre.success(f"✅ 前置偵察完成！核心航線基準價約為 {core_baseline_price:,} TWD。準備進入深度掃描...")
+        if len(out_combinations) > 10:
+            msg_pre = st.info(f"⚡ 階段一跳轉：外站組合高達 {len(out_combinations)} 組，為防止 API 卡死，已直接套用保底基準價！")
+            for h1, h4 in out_combinations:
+                baseline_cache[f"{h1}_{h4}"] = fallback_d1d4
+        else:
+            msg_pre = st.info("🕵️‍♂️ 階段一：正在背景動態查詢分段機票行情...")
+            d1_rep, d4_rep = d1_dates[0].strftime("%Y-%m-%d"), d4_dates[0].strftime("%Y-%m-%d")
+            for h1, h4 in out_combinations:
+                out_legs = [
+                    {"fromId": f"{h1}.AIRPORT", "toId": "TPE.AIRPORT", "date": d1_rep},
+                    {"fromId": "TPE.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4_rep}
+                ]
+                res_out = fetch_booking_bundle(out_legs, cabin_choice, strict_ci=False)
+                baseline_cache[f"{h1}_{h4}"] = res_out.get("price", fallback_d1d4) if res_out["status"] == "success" else fallback_d1d4
+            msg_pre.success(f"✅ 前置偵察完成！核心航線基準價約為 {core_baseline_price:,} TWD。準備進入深度掃描...")
 
         # ---------------------------------------------------------
         # 【階段二：正式大規模掃描】
@@ -190,7 +191,6 @@ if st.button("🚀 啟動 Booking.com 獵殺引擎", use_container_width=True):
             h1_code, h4_code = h1_raw.split(" ")[0], h4_raw.split(" ")[0]
             for d1, d4 in product(d1_dates, d4_dates):
                 if d1 <= d2_date and d4 >= d3_date: 
-                    # 準備四段票 legs
                     scan_legs = [
                         {"fromId": f"{h1_code}.AIRPORT", "toId": f"{d2_org}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
                         {"fromId": f"{d2_org}.AIRPORT", "toId": f"{d2_dst}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
@@ -221,7 +221,6 @@ if st.button("🚀 啟動 Booking.com 獵殺引擎", use_container_width=True):
                             if res["status"] == "success":
                                 if debug_mode and len(raw_debug_data) < 3 and res.get("raw"): raw_debug_data.append(res["raw"])
                                 if res["offer"]: 
-                                    # 動態綁定對應的基準價
                                     res["offer"]["dynamic_ref_price"] = core_baseline_price + baseline_cache[f"{h1_code}_{h4_code}"]
                                     valid_results.append(res["offer"])
                             else: error_count += 1
