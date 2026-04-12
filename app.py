@@ -9,11 +9,10 @@ from itertools import product
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
-# 0. 企業級 UI 與金鑰設定 (已修復最新版 Streamlit CSS 阻擋問題)
+# 0. 企業級 UI 與金鑰設定 (撥雲見日明亮版)
 # ==========================================
 st.set_page_config(page_title="Flight Actuary | 華航外站獵殺器", page_icon="✈️", layout="wide")
 
-# 🌟 終極視覺補丁：高空飛機虛化背景 + 毛玻璃卡片
 st.markdown("""
 <style>
     /* 隱藏預設選單與浮水印 */
@@ -21,30 +20,30 @@ st.markdown("""
     footer {visibility: hidden;} 
     header {visibility: hidden;}
     
-    /* 暴力覆蓋最新版 Streamlit 的背景容器：加入真實飛機雲層背景 + 深色漸層遮罩 */
+    /* 🌤️ 解除暗黑封印：大幅降低漸層遮罩的透明度 (從 0.85 降到 0.2)，讓背景飛機圖透出來 */
     [data-testid="stAppViewContainer"], .stApp {
-        background-image: linear-gradient(rgba(10, 15, 25, 0.85), rgba(10, 15, 25, 0.95)), url("https://images.unsplash.com/photo-1436491865332-7a61a109cc05?q=80&w=2074&auto=format&fit=crop");
+        background-image: linear-gradient(rgba(10, 15, 30, 0.2), rgba(10, 15, 30, 0.6)), url("https://images.unsplash.com/photo-1436491865332-7a61a109cc05?q=80&w=2074&auto=format&fit=crop");
         background-size: cover !important;
         background-position: center !important;
         background-attachment: fixed !important;
     }
     
-    /* 讓 Expander 卡片變成真實的「毛玻璃 (Glassmorphism)」質感 */
+    /* 🧊 強化毛玻璃對比：稍微加深卡片底色，確保背景變亮後，白字依然清晰 */
     [data-testid="stExpander"] {
-        background-color: rgba(255, 255, 255, 0.05) !important;
-        backdrop-filter: blur(12px) !important;
-        -webkit-backdrop-filter: blur(12px) !important;
-        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        background-color: rgba(15, 25, 40, 0.4) !important;
+        backdrop-filter: blur(16px) !important;
+        -webkit-backdrop-filter: blur(16px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important;
         border-radius: 12px !important;
-        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3) !important;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4) !important;
         margin-bottom: 12px;
     }
     
-    /* 輸入框與選單的微調，融入背景 */
+    /* 輸入框與選單的微調：加深一點點底色以襯托文字 */
     .stTextInput>div>div>input, .stSelectbox>div>div>div, .stDateInput>div>div>input, .stNumberInput>div>div>input {
-        background-color: rgba(255, 255, 255, 0.05) !important;
+        background-color: rgba(10, 15, 25, 0.5) !important;
         color: #ffffff !important;
-        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+        border: 1px solid rgba(255, 255, 255, 0.25) !important;
     }
 
     /* 漸層標題，帶有發光效果 */
@@ -56,14 +55,16 @@ st.markdown("""
         font-size: 2.8rem;
         margin-bottom: -10px;
         letter-spacing: 1px;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3); /* 加點陰影防字體融進背景 */
     }
     
     /* 標題副標籤 */
     .custom-subtitle {
-        color: #8da4c0;
+        color: #e2e8f0;
         font-size: 1.1rem;
-        font-weight: 500;
+        font-weight: 600;
         margin-bottom: 20px;
+        text-shadow: 1px 1px 3px rgba(0,0,0,0.5);
     }
 </style>
 """, unsafe_allow_html=True)
