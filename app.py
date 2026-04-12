@@ -14,7 +14,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ==========================================
 st.set_page_config(page_title="Flight Actuary | 華航外站獵殺器", page_icon="✈️", layout="wide")
 
-# 黑盒子實體檔案路徑
 BLACKBOX_FILE = "blackbox_log.jsonl"
 
 st.markdown("""
@@ -39,8 +38,8 @@ st.markdown("""
         margin-bottom: 12px; border-radius: 8px; color: #ffffff; font-weight: 600; backdrop-filter: blur(5px);
     }
     .rescue-box {
-        padding: 15px; border: 2px dashed #ffb300; background: rgba(255, 179, 0, 0.1); 
-        border-radius: 10px; margin-bottom: 20px;
+        padding: 15px; border: 2px dashed #ffb300; background: rgba(255, 179, 0, 0.15); 
+        border-radius: 10px; margin-bottom: 20px; color: #ffffff;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -60,7 +59,7 @@ CI_ASIAN_HUBS = {
 ALL_FORMATTED_CITIES = [f"{code} ({name})" for region, cities in CI_ASIAN_HUBS.items() for code, name in cities.items()]
 
 # ==========================================
-# 0.5 📦 黑盒子資料讀取區 (放在最上方，當機重整立刻看到)
+# 0.5 📦 黑盒子資料讀取區
 # ==========================================
 st.markdown('<p class="custom-title">✈️ Flight Actuary Console</p>', unsafe_allow_html=True)
 st.markdown('<p style="color:#cbd5e1; font-weight:600; margin-bottom:25px;">中華航空 (CI) 外站四段聯程・動態獵殺儀表板</p>', unsafe_allow_html=True)
@@ -71,10 +70,10 @@ if os.path.exists(BLACKBOX_FILE):
             rescued_data = [json.loads(line) for line in f if line.strip()]
         
         if rescued_data:
-            st.markdown("<div class='rescue-box'><h4>📁 墜機搶救紀錄 (黑盒子)</h4><p>系統偵測到您上次執行可能有中斷，以下是當機前成功為您攔截到的特價票：</p></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='rescue-box'><h4>📁 墜機搶救紀錄 (黑盒子)</h4><p>成功為您找回上次中斷前攔截到的 <b>{len(rescued_data)}</b> 組航班報價：</p></div>", unsafe_allow_html=True)
             rescued_data.sort(key=lambda x: x['total'])
             
-            for r in rescued_data[:30]: # 最多顯示前30筆便宜的
+            for r in rescued_data[:50]: 
                 diff = r.get("ref", 0) - r['total']
                 badge = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省下 {diff:,}</span>" if diff > 0 else f"<span style='color:#ff5252;'>⚠️ 虧損 {abs(diff):,}</span>"
                 with st.expander(f"💾 [備份] 💰 {r['total']:,} TWD | {badge} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})"):
@@ -86,7 +85,7 @@ if os.path.exists(BLACKBOX_FILE):
                 os.remove(BLACKBOX_FILE)
                 st.rerun()
             st.markdown("---")
-    except Exception as e:
+    except Exception:
         pass
 
 # ==========================================
@@ -145,8 +144,23 @@ def fetch_booking_bundle(legs, cabin, strict_ci, title="", d1="", d4="", debug_m
     return {"status": "error", "error": "逾時"}
 
 # ==========================================
-# 2. UI 面板
+# 2. UI 面板與動態連動邏輯
 # ==========================================
+# 初始化 Session State (確保第一次載入時有預設值)
+if "d1_city" not in st.session_state:
+    st.session_state.d1_city = [f"{c} ({n})" for c, n in CI_ASIAN_HUBS["港澳"].items()]
+if "d4_city" not in st.session_state:
+    st.session_state.d4_city = [f"{c} ({n})" for c, n in CI_ASIAN_HUBS["港澳"].items()]
+
+# 強制連動 Callback 函數
+def sync_d1():
+    regs = st.session_state.d1_reg
+    st.session_state.d1_city = ALL_FORMATTED_CITIES if "全部" in regs else [f"{c} ({n})" for r in regs if r in CI_ASIAN_HUBS for c, n in CI_ASIAN_HUBS[r].items()]
+
+def sync_d4():
+    regs = st.session_state.d4_reg
+    st.session_state.d4_city = ALL_FORMATTED_CITIES if "全部" in regs else [f"{c} ({n})" for r in regs if r in CI_ASIAN_HUBS for c, n in CI_ASIAN_HUBS[r].items()]
+
 c_toggles = st.columns(2)
 with c_toggles[0]: strict_ci_toggle = st.checkbox("🔒 嚴格鎖定純華航 (CI) 航班", value=True)
 with c_toggles[1]: debug_mode = st.checkbox("🛠️ 開啟 Debug 模式", value=False) 
@@ -170,15 +184,17 @@ with c_ref2: fallback_d1d4 = st.number_input("保底 D1/D4 亞洲價", value=250
 st.subheader("🌍 外站雷達 (D1 / D4)")
 c_d1, c_d4 = st.columns(2)
 with c_d1:
-    d1_regions = st.multiselect("🗂️ 區域 (D1)", ["全部", "東南亞", "東北亞", "港澳"], default=["港澳", "東南亞"])
-    d1_defaults = [f"{c} ({n})" for r in d1_regions if r in CI_ASIAN_HUBS for c, n in CI_ASIAN_HUBS[r].items()]
-    d1_hubs_raw = st.multiselect("📍 D1 起點庫", ALL_FORMATTED_CITIES, default=d1_defaults[:5], key="d1_city")
+    # 綁定 Callback：只要動了這個選單，就會觸發 sync_d1
+    st.multiselect("🗂️ 區域 (D1)", ["全部", "東南亞", "東北亞", "港澳"], default=["港澳"], key="d1_reg", on_change=sync_d1)
+    # 起點庫綁定 Session State，由 sync_d1 控制
+    d1_hubs_raw = st.multiselect("📍 D1 起點庫", ALL_FORMATTED_CITIES, key="d1_city")
     d1_date_range = st.date_input("📅 D1 日期", value=(date(2026, 6, 10), date(2026, 6, 11)))
 
 with c_d4:
-    d4_regions = st.multiselect("🗂️ 區域 (D4)", ["全部", "東南亞", "東北亞", "港澳"], default=["港澳", "東南亞"])
-    d4_defaults = [f"{c} ({n})" for r in d4_regions if r in CI_ASIAN_HUBS for c, n in CI_ASIAN_HUBS[r].items()]
-    d4_hubs_raw = st.multiselect("📍 D4 終點庫", ALL_FORMATTED_CITIES, default=d4_defaults[:5], key="d4_city")
+    # 綁定 Callback：只要動了這個選單，就會觸發 sync_d4
+    st.multiselect("🗂️ 區域 (D4)", ["全部", "東南亞", "東北亞", "港澳"], default=["港澳"], key="d4_reg", on_change=sync_d4)
+    # 終點庫綁定 Session State，由 sync_d4 控制
+    d4_hubs_raw = st.multiselect("📍 D4 終點庫", ALL_FORMATTED_CITIES, key="d4_city")
     d4_date_range = st.date_input("📅 D4 日期", value=(date(2026, 6, 25), date(2026, 6, 26)))
 
 c_cab, c_adt = st.columns([1, 1])
@@ -194,9 +210,7 @@ if st.button("🚀 啟動動態精算獵殺", use_container_width=True):
     if d1_date_range[0] > d2_date or d4_date_range[1] < d3_date: st.error("⚠️ D1 不能晚於 D2；D4 不能早於 D3！"); st.stop()
     if not d1_hubs_raw or not d4_hubs_raw: st.error("⚠️ 請至少保留一個外站。"); st.stop()
     
-    # 每次啟動新搜尋時，清空舊的黑盒子紀錄
-    if os.path.exists(BLACKBOX_FILE):
-        os.remove(BLACKBOX_FILE)
+    with open(BLACKBOX_FILE, "w", encoding="utf-8") as file: pass 
 
     d1_dates = [d1_date_range[0] + timedelta(days=i) for i in range((d1_date_range[1]-d1_date_range[0]).days + 1)]
     d4_dates = [d4_date_range[0] + timedelta(days=i) for i in range((d4_date_range[1]-d4_date_range[0]).days + 1)]
@@ -221,7 +235,10 @@ if st.button("🚀 啟動動態精算獵殺", use_container_width=True):
     total = len(all_tasks)
     if total == 0: st.warning("⚠️ 無法產生有效的四段票組合。"); st.stop()
 
-    msg = st.warning(f"🔥 任務總數 {total} 組。啟動黑盒子實時備份與掃描...")
+    if total > 300:
+        st.warning(f"⚠️ **警告：任務高達 {total} 組！** 雲端主機有 15 分鐘強制斷線機制，強烈建議您減少 D1/D4 的站點數量 (例如只測單一區域) 來確保順利跑完。")
+
+    msg = st.warning(f"🔥 任務啟動 ({total} 組)。黑盒子無條件備份中...")
     pb = st.progress(0)
     live_feed = st.empty()
     valid_results, processed, quota_dead = [], 0, False
@@ -244,16 +261,15 @@ if st.button("🚀 啟動動態精算獵殺", use_container_width=True):
                         
                         diff = offer_data["ref"] - offer_data['total']
                         
-                        # 📦 黑盒子寫入：一旦找到，立刻存入實體檔案！
-                        if diff > -20000: # 只存省錢或沒虧太多的票
-                            with open(BLACKBOX_FILE, "a", encoding="utf-8") as file:
-                                file.write(json.dumps(offer_data, ensure_ascii=False) + "\n")
+                        # 無條件寫入黑盒子
+                        with open(BLACKBOX_FILE, "a", encoding="utf-8") as file:
+                            file.write(json.dumps(offer_data, ensure_ascii=False) + "\n")
 
                         if diff > 10000:
                             with live_feed.container():
                                 st.markdown(f"<div class='live-hit'>🔔 <b>捕獲高價值票 (已備份)！</b> {offer_data['title']} | 總價: {offer_data['total']:,} | <span style='color:#00e676'>現省 {diff:,}</span></div>", unsafe_allow_html=True)
                 except Exception: pass
-                if processed % 5 == 0: pb.progress(processed / total, text=f"掃描中: {processed}/{total} (實體備份運作中)")
+                if processed % 5 == 0: pb.progress(processed / total, text=f"掃描中: {processed}/{total} (黑盒子紀錄中)")
         gc.collect()
 
     pb.empty(); msg.empty()
