@@ -40,6 +40,10 @@ st.markdown("""
         padding: 15px; border: 2px dashed #ffb300; background: rgba(255, 179, 0, 0.15); 
         border-radius: 10px; margin-bottom: 20px; color: #ffffff;
     }
+    .leaderboard-box {
+        padding: 15px; border-left: 5px solid #4da8da; background: rgba(20, 35, 55, 0.7); 
+        border-radius: 8px; margin-bottom: 20px; color: #ffffff;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -67,34 +71,39 @@ CI_ASIAN_HUBS = {
 ALL_FORMATTED_CITIES = [f"{code} ({name})" for region, cities in CI_ASIAN_HUBS.items() for code, name in cities.items()]
 
 # ==========================================
-# 0.5 📦 黑盒子資料讀取區
+# 0.5 📦 黑盒子資料讀取區 (單行隔離防護版)
 # ==========================================
 st.markdown('<p class="custom-title">✈️ Flight Actuary Console</p>', unsafe_allow_html=True)
-st.markdown('<p style="color:#cbd5e1; font-weight:600; margin-bottom:25px;">永不掉線接力版 (乾淨潔癖模式)</p>', unsafe_allow_html=True)
+st.markdown('<p style="color:#cbd5e1; font-weight:600; margin-bottom:25px;">永不掉線接力版 (最終潔癖全防護模式)</p>', unsafe_allow_html=True)
 
 if not st.session_state.engine_running and os.path.exists(BLACKBOX_FILE):
-    try:
-        with open(BLACKBOX_FILE, "r", encoding="utf-8") as f:
-            rescued_data = [json.loads(line) for line in f if line.strip()]
-        
-        if rescued_data:
-            st.markdown(f"<div class='rescue-box'><h4>📁 黑盒子搶救紀錄</h4><p>成功找回上次中斷前攔截到的 <b>{len(rescued_data)}</b> 組特價航班：</p></div>", unsafe_allow_html=True)
-            rescued_data.sort(key=lambda x: x['total'])
-            for r in rescued_data[:100]: 
-                diff = r.get("ref", 0) - r['total']
-                badge_plain = f"🔥 狂省 {diff:,}" if diff > 50000 else f"✨ 省下 {diff:,}" if diff > 0 else f"⚠️ 虧損 {abs(diff):,}"
-                badge_html = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省下 {diff:,}</span>" if diff > 0 else f"<span style='color:#ff5252;'>⚠️ 虧損 {abs(diff):,}</span>"
-                
-                with st.expander(f"💰 {r['total']:,} TWD | {badge_plain} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})"):
-                    st.markdown(f"**💰 價差精算：** 傳統分開買約 `{r.get('ref', 0):,}` ➔ 隱藏聯程價 `{r['total']:,}` ( {badge_html} )", unsafe_allow_html=True)
-                    st.markdown("---")
-                    for j, leg in enumerate(r['legs'], 1): st.write(f"**航段 {j}** | {leg}")
-            if st.button("🗑️ 清除黑盒子紀錄 (準備執行全新掃描)"):
-                os.remove(BLACKBOX_FILE)
-                st.session_state.valid_offers = []
-                st.rerun()
-            st.markdown("---")
-    except: pass
+    rescued_data = []
+    with open(BLACKBOX_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                # 🛡️ 單行隔離防護：即使某行 JSON 因伺服器斷電毀損，也不會波及其他資料
+                try:
+                    rescued_data.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass 
+    
+    if rescued_data:
+        st.markdown(f"<div class='rescue-box'><h4>📁 黑盒子搶救紀錄</h4><p>成功找回上次掃描攔截到的 <b>{len(rescued_data)}</b> 組特價航班：</p></div>", unsafe_allow_html=True)
+        rescued_data.sort(key=lambda x: x['total'])
+        for r in rescued_data[:100]: 
+            diff = r.get("ref", 0) - r['total']
+            badge_plain = f"🔥 狂省 {diff:,}" if diff > 50000 else f"✨ 省下 {diff:,}" if diff > 0 else f"⚠️ 虧損 {abs(diff):,}"
+            badge_html = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省下 {diff:,}</span>" if diff > 0 else f"<span style='color:#ff5252;'>⚠️ 虧損 {abs(diff):,}</span>"
+            
+            with st.expander(f"💾 💰 {r['total']:,} TWD | {badge_plain} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})"):
+                st.markdown(f"**💰 價差精算：** 傳統分開買約 `{r.get('ref', 0):,}` ➔ 隱藏聯程價 `{r['total']:,}` ( {badge_html} )", unsafe_allow_html=True)
+                st.markdown("---")
+                for j, leg in enumerate(r['legs'], 1): st.write(f"**航段 {j}** | {leg}")
+        if st.button("🗑️ 清除黑盒子紀錄 (準備執行全新掃描)"):
+            os.remove(BLACKBOX_FILE)
+            st.session_state.valid_offers = []
+            st.rerun()
+        st.markdown("---")
 
 # ==========================================
 # 1. API 請求引擎
@@ -148,8 +157,19 @@ def sync_d1(): st.session_state.d1_city = ALL_FORMATTED_CITIES if "全部" in st
 def sync_d4(): st.session_state.d4_city = ALL_FORMATTED_CITIES if "全部" in st.session_state.d4_reg else [f"{c} ({n})" for r in st.session_state.d4_reg if r in CI_ASIAN_HUBS for c, n in CI_ASIAN_HUBS[r].items()]
 
 if st.session_state.engine_running:
-    st.info("⚙️ **跨夜接力獵殺進行中...** 請保持電腦清醒、接上電源，明早起床見分曉。")
-    if st.button("🛑 停止獵殺並查看現有戰果", type="primary"):
+    st.info("⚙️ **跨夜自動接力獵殺進行中...** 請保持電腦清醒、接上電源，明早見分曉。")
+    
+    # 🌟 實時戰果看盤區 (防斷看盤)
+    if st.session_state.valid_offers:
+        st.markdown("<div class='leaderboard-box'><h4>🏆 即時最高省錢排行榜 (Top 5)</h4>", unsafe_allow_html=True)
+        temp_res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
+        for idx, r in enumerate(temp_res[:5], 1):
+            diff = r["ref"] - r['total']
+            b_h = f"<span style='color:#00e676; font-weight:bold;'>🔥 省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省 {diff:,}</span>"
+            st.markdown(f"**Top {idx}:** `{r['total']:,} TWD` | {b_h} | {r['title']} (D1:{r['d1']})", unsafe_allow_html=True)
+        st.markdown("<p style='font-size:0.8rem; color:#8da4c0;'>掃描仍在背景繼續，每 15 秒自動刷新...</p></div>", unsafe_allow_html=True)
+
+    if st.button("🛑 提前終止掃描並進行結算", type="primary"):
         st.session_state.engine_running = False
         st.rerun()
 else:
@@ -221,7 +241,7 @@ else:
 if st.session_state.engine_running:
     total = len(st.session_state.task_list)
     curr = st.session_state.task_idx
-    BATCH = 15 # 縮小批次，極度保險，防 API Timeout
+    BATCH = 15 
     
     batch_tasks = st.session_state.task_list[curr : curr + BATCH]
     st.progress(min(curr / total, 1.0), text=f"核彈掃描進度: {curr}/{total} | 已收穫: {len(st.session_state.valid_offers)} | 接力進行中...")
@@ -274,4 +294,8 @@ if not st.session_state.engine_running and st.session_state.task_list:
                 st.markdown(f"**💰 價差精算：** 傳統分段買約 `{r['ref']:,}` ➔ 隱藏聯程價 `{r['total']:,}` ( {b_h} )", unsafe_allow_html=True)
                 st.markdown("---")
                 for j, leg in enumerate(r['legs'], 1): st.write(f"**航段 {j}** | {leg}")
-    else: st.warning("📉 本次掃描結果皆為虧損票，已全部自動過濾。")
+    else: 
+        if st.session_state.hide_loss:
+            st.warning("📉 本次掃描結果皆為虧損票，已啟動潔癖模式全部濾除。建議更換日期或區域再戰！")
+        else:
+            st.error("❌ 本次掃描未尋獲符合條件之特價聯程票。")
