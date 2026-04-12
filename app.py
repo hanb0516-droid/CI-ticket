@@ -6,7 +6,7 @@ import time
 # --- 隱藏網頁元素 ---
 st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
 
-# 🌟 引擎 A：多點搜尋 (專門破解歐洲長程線 A進B出 真實票價)
+# 🌟 引擎 A：多點搜尋 (專門破解歐洲長程線 A進B出，且嚴格過濾華航)
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_europe_main_legs(leg1_from, leg1_to, d1, leg2_from, leg2_to, d2, cabin_class, adults, children, infants):
     api_key = "dce25cdb5amshe2e8ea332763a58p1ca56ajsna52ab815ea5a"
@@ -30,16 +30,39 @@ def fetch_europe_main_legs(leg1_from, leg1_to, d1, leg2_from, leg2_to, d2, cabin
         response.raise_for_status() 
         data = response.json()
         
-        if not data.get('data') or not data['data'].get('itineraries'):
+        itineraries = data.get('data', {}).get('itineraries', [])
+        if not itineraries:
              return {"status": "❌ 查無航班", "total_price": 0, "legs": []}
 
-        itinerary = data['data']['itineraries'][0]
-        real_total_price = itinerary['price']['raw']
+        # 🔍 華航過濾器：尋找第一筆「每一段都是華航」的行程
+        ci_itinerary = None
+        for itin in itineraries:
+            is_all_ci = True
+            for leg in itin.get('legs', []):
+                carriers = leg.get('carriers', {}).get('marketing', [])
+                if not carriers:
+                    is_all_ci = False
+                    break
+                c_name = carriers[0].get('name', '').lower()
+                c_code = carriers[0].get('alternateId', '')
+                # 只要名字沒有中華、China Airlines 或代碼不是 CI，就淘汰
+                if '中華' not in c_name and 'china airlines' not in c_name and c_code != 'CI':
+                    is_all_ci = False
+                    break
+            
+            if is_all_ci:
+                ci_itinerary = itin
+                break # 找到了最便宜的純華航機票，停止搜尋
+
+        if not ci_itinerary:
+            return {"status": "❌ 查無純華航組合", "total_price": 0, "legs": []}
+
+        real_total_price = ci_itinerary['price']['raw']
         
         flight_details = []
         for i in range(2):
             try:
-                leg = itinerary['legs'][i]
+                leg = ci_itinerary['legs'][i]
                 carriers = leg.get('carriers', {}).get('marketing', [])
                 c_name = carriers[0].get('name', '華航') if carriers else '華航'
                 f_num = leg.get('segments', [{}])[0].get('flightNumber', '')
@@ -51,9 +74,9 @@ def fetch_europe_main_legs(leg1_from, leg1_to, d1, leg2_from, leg2_to, d2, cabin
                 
         return {"status": "✅", "total_price": int(real_total_price), "legs": flight_details}
     except Exception as e:
-        return {"status": f"❌ 錯誤", "total_price": 0, "legs": []}
+        return {"status": f"❌ 系統錯誤", "total_price": 0, "legs": []}
 
-# 🌟 引擎 B：單程搜尋 (專門探測亞洲外站的稅金與基礎票價)
+# 🌟 引擎 B：單程搜尋 (嚴格過濾華航)
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_asia_outer_legs(origin, dest, date, cabin_class):
     api_key = "dce25cdb5amshe2e8ea332763a58p1ca56ajsna52ab815ea5a"
@@ -66,10 +89,28 @@ def fetch_asia_outer_legs(origin, dest, date, cabin_class):
         time.sleep(0.5)
         response = requests.get(url, headers=headers, params=params, timeout=12)
         data = response.json()
-        real_price = data['data']['itineraries'][0]['price']['raw']
+        
+        itineraries = data.get('data', {}).get('itineraries', [])
+        
+        # 🔍 華航過濾器
+        ci_itinerary = None
+        for itin in itineraries:
+            leg = itin.get('legs', [{}])[0]
+            carriers = leg.get('carriers', {}).get('marketing', [])
+            if carriers:
+                c_name = carriers[0].get('name', '').lower()
+                c_code = carriers[0].get('alternateId', '')
+                if '中華' in c_name or 'china airlines' in c_name or c_code == 'CI':
+                    ci_itinerary = itin
+                    break
+                    
+        if not ci_itinerary:
+             return {"base_price": 0, "status": "❌ 查無華航", "info": ""}
+
+        real_price = ci_itinerary['price']['raw']
         
         try:
-            leg = data['data']['itineraries'][0]['legs'][0]
+            leg = ci_itinerary['legs'][0]
             c_name = leg.get('carriers', {}).get('marketing', [{}])[0].get('name', '華航')
             f_num = leg.get('segments', [{}])[0].get('flightNumber', '')
             dep = leg.get('departure', '')
@@ -80,13 +121,13 @@ def fetch_asia_outer_legs(origin, dest, date, cabin_class):
             
         return {"base_price": int(real_price), "status": "✅", "info": f_info}
     except:
-        return {"base_price": 0, "status": "❌", "info": ""}
+        return {"base_price": 0, "status": "❌ 異常", "info": ""}
 
 def calc_family(base_price, adults, children, infants):
     return (base_price * adults) + (int(base_price * 0.75) * children) + (int(base_price * 0.10) * infants)
 
 # --- App 介面 ---
-st.title("✈️ 華航外站四段票神器 (混血雙引擎版)")
+st.title("✈️ 華航外站四段票神器 (純粹華航版)")
 
 st.subheader("🗓️ 行程與艙等設定")
 c_dest1, c_dest2 = st.columns(2)
@@ -107,20 +148,20 @@ with c3: infants = st.number_input("嬰兒", value=1)
 
 asia_hubs = ["FUK", "KUL", "BKK", "MNL", "NRT"]
 
-if st.button("🚀 執行混血精算 (準確度最高)", use_container_width=True):
-    with st.spinner('正在與華航系統核對 A進B出 真實價格，並掃描亞洲外站...'):
+if st.button("🚀 執行純華航精算", use_container_width=True):
+    with st.spinner('正在過濾並抓取全由【中華航空】執飛的航班報價...'):
         results = []
         
-        # 1. 先抓最難的：歐洲長程主段 (A進B出 真實全家總價)
+        # 1. 抓歐洲長程 (A進B出 且純華航)
         europe_main = fetch_europe_main_legs("TPE", out_dest, date_out.strftime("%Y-%m-%d"), in_origin, "TPE", date_in.strftime("%Y-%m-%d"), cabin_choice, adults, children, infants)
         
         if "❌" in europe_main['status']:
-            st.error(f"⚠️ 歐洲長程段查無機票！這通常代表該日期的商務艙已售罄。")
+            st.error(f"⚠️ {europe_main['status']}！這代表這天華航沒有飛，或是被其他更便宜的航空擠掉了。")
         else:
             europe_total_price = europe_main['total_price']
-            st.info(f"💶 已成功抓取歐洲長程 A進B出 真實全家總價：**NT$ {europe_total_price:,}**")
+            st.info(f"🌸 成功抓取華航歐洲長程 A進B出 真實全家總價：**NT$ {europe_total_price:,}**")
             
-            # 2. 開始掃描外站短程線
+            # 2. 掃描亞洲外站 (純華航)
             for hub in asia_hubs:
                 d1_date = (date_out - timedelta(days=45)).strftime("%Y-%m-%d")
                 d4_date = (date_in + timedelta(days=45)).strftime("%Y-%m-%d")
@@ -132,7 +173,6 @@ if st.button("🚀 執行混血精算 (準確度最高)", use_container_width=Tr
                     f1_family = calc_family(s1['base_price'], adults, children, infants)
                     f4_family = calc_family(s4['base_price'], adults, children, infants)
                     
-                    # 💡 四段合買演算法：長程票打 9 折優惠 + 短程票只收 15% 稅金
                     together_total = int(europe_total_price * 0.90 + (f1_family + f4_family) * 0.15)
                     separate_total = europe_total_price + f1_family + f4_family
 
@@ -154,7 +194,7 @@ if st.button("🚀 執行混血精算 (準確度最高)", use_container_width=Tr
 
             if results:
                 top_results = sorted(results, key=lambda x: x['together'])
-                st.success("🎉 精算完成！")
+                st.success("🎉 純華航過濾完成！")
                 
                 for i, res in enumerate(top_results, 1):
                     with st.expander(f"🏆 第 {i} 名：{res['hub']} 起降 ➔ 四段合買預估 NT$ {res['together']:,}"):
@@ -162,6 +202,6 @@ if st.button("🚀 執行混血精算 (準確度最高)", use_container_width=Tr
                         st.write(f"🛑 如果分開單買總價：NT$ {res['separate']:,}")
                         st.write(f"🤑 四段合買為您省下：**NT$ {res['savings']:,}**")
                         st.markdown("---")
-                        st.markdown("**✈️ 實際航班明細：**")
+                        st.markdown("**✈️ 實際航班明細 (保證華航)：**")
                         for info in res['details']:
                             st.write(f"• {info}")
