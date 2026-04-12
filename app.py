@@ -6,18 +6,18 @@ import requests
 import time
 
 # --- 介面隱藏 ---
-st.set_page_config(page_title="華航聯程獵殺器 vFinal", layout="wide")
+st.set_page_config(page_title="華航聯程獵殺器 (無死角版)", layout="wide")
 st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
 
 API_KEY = "dce25cdb5amshe2e8ea332763a58p1ca56ajsna52ab815ea5a"
 BASE_URL = "https://flights-sky.p.rapidapi.com"
 
-# 🛡️ 穩定型請求 (加入 2.2 秒強效冷卻)
+# 🛡️ 穩定型請求
 def stable_request(url, method="GET", params=None, json=None):
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "flights-sky.p.rapidapi.com", "Content-Type": "application/json"}
     for i in range(3):
         try:
-            time.sleep(2.2) # 絕對安全閾值，防止 API 斷電
+            time.sleep(2.2) 
             if method == "GET":
                 res = requests.get(url, headers=headers, params=params, timeout=25)
             else:
@@ -59,7 +59,7 @@ def scan_calendar(origin, dest, month_str, cabin, s_limit, e_limit):
             except: continue
     return results
 
-# 🌟 引擎 C：直飛基準價 (已加回)
+# 🌟 引擎 C：直飛基準價
 def fetch_base_price(d2_o, d2_d, d2_dt, d3_o, d3_d, d3_dt, cabin, adults):
     c_map = {"商務艙": "business", "豪經艙": "premiumeconomy", "經濟艙": "economy"}
     payload = {
@@ -99,7 +99,7 @@ def fetch_bundle_price(h_in, d1, h_out, d4, d2_o, d2_d, d2_dt, d3_o, d3_d, d3_dt
     return None
 
 # --- UI ---
-st.title("✈️ 華航外站聯程獵殺器 (最終無火花版)")
+st.title("✈️ 華航聯程獵殺器 (全區間防禦版)")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -122,7 +122,7 @@ st.success(f"📡 獵殺區間：D1({d1_start}~{d2_date}) | D4({d3_date}~{d4_end
 
 cabin_choice = st.selectbox("💺 選擇艙等", ["商務艙", "豪經艙", "經濟艙"])
 adult_count = st.number_input("大人人數", value=1, min_value=1)
-selected_hubs = st.multiselect("📍 選擇掃描外站：", ["PUS", "ICN", "KUL", "BKK", "MNL", "HKG", "NRT", "FUK"], default=["PUS", "ICN", "KUL"])
+selected_hubs = st.multiselect("📍 選擇掃描外站：", ["PUS", "ICN", "KUL", "BKK", "MNL", "HKG", "NRT", "FUK", "SGN"], default=["PUS", "ICN", "KUL"])
 
 if st.button("🚀 啟動聯程獵殺", use_container_width=True):
     if not selected_hubs:
@@ -137,26 +137,43 @@ if st.button("🚀 啟動聯程獵殺", use_container_width=True):
 
         for hub in selected_hubs:
             msg.info(f"⚡ 正在探測 {hub}...")
-            for m in d1_m: d1_cands.extend(scan_calendar(hub, d2_org, m, cabin_choice, d1_start, d2_date))
-            for m in d4_m: d4_cands.extend(scan_calendar(d3_dst, hub, m, cabin_choice, d3_date, d4_end))
+            hub_d1_found = 0
+            hub_d4_found = 0
+            
+            for m in d1_m: 
+                res = scan_calendar(hub, d2_org, m, cabin_choice, d1_start, d2_date)
+                d1_cands.extend(res)
+                hub_d1_found += len(res)
+            
+            for m in d4_m: 
+                res = scan_calendar(d3_dst, hub, m, cabin_choice, d3_date, d4_end)
+                d4_cands.extend(res)
+                hub_d4_found += len(res)
+            
+            # 🛡️ 補回被我不小心刪掉的日誌寫入
+            debug.write(f"✅ {hub} 探測完畢：去程找到 {hub_d1_found} 天，回程找到 {hub_d4_found} 天。")
 
-        # 🛡️ 容錯保底機制 (使用選擇清單的第一個城市，不再強插 MNL)
-        fallback_hub = selected_hubs[0]
-        if not d1_cands: d1_cands.append({"hub": fallback_hub, "day": d1_start, "price": 999999})
-        if not d4_cands: d4_cands.append({"hub": fallback_hub, "day": d4_end - timedelta(days=5), "price": 999999})
+        # 🛡️ 強化版保底機制：若雷達完全失效，讓所有被選中的城市都進入盲測
+        if not d1_cands:
+            debug.write("⚠️ 日曆雷達去程失效，啟動所有選中外站的盲測模式...")
+            for hub in selected_hubs:
+                d1_cands.append({"hub": hub, "day": d1_start, "price": 999999})
+        if not d4_cands:
+            debug.write("⚠️ 日曆雷達回程失效，啟動所有選中外站的盲測模式...")
+            for hub in selected_hubs:
+                d4_cands.append({"hub": hub, "day": d4_end - timedelta(days=5), "price": 999999})
 
         msg.warning("🔥 正在獲取直飛基準價與真實聯程價...")
         
-        # 抓基準價
         base_p = fetch_base_price(d2_org, d2_dst, d2_date, d3_org, d3_dst, d3_date, cabin_choice, adult_count)
 
-        top_d1 = sorted(d1_cands, key=lambda x: x['price'])[:2]
-        top_d4 = sorted(d4_cands, key=lambda x: x['price'])[:2]
+        # 每個陣列取前 3 個 (包含盲測的假數據)
+        top_d1 = sorted(d1_cands, key=lambda x: x['price'])[:3]
+        top_d4 = sorted(d4_cands, key=lambda x: x['price'])[:3]
 
         results = []
         combos = list(product(top_d1, top_d4))
         
-        # 循序執行，附帶進度條
         progress_bar = st.progress(0)
         for idx, (d1, d4) in enumerate(combos):
             progress_bar.progress((idx + 1) / len(combos), text=f"精算中：{d1['hub']} ➔ {d4['hub']} ({idx+1}/{len(combos)})")
