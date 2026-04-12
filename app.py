@@ -17,7 +17,7 @@ except KeyError:
     st.error("🚨 系統找不到 Booking API 金鑰！請確認您已在 Streamlit 後台的 Secrets 中設定了 BOOKING_API_KEY。")
     st.stop()
 
-# 🌍 華航全亞洲站點資料庫
+# 🌍 華航亞洲站點資料庫 (已剔除大陸)
 CI_ASIAN_HUBS = {
     "東南亞": {
         "BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", 
@@ -33,11 +33,6 @@ CI_ASIAN_HUBS = {
     },
     "港澳": {
         "HKG": "香港", "MFM": "澳門"
-    },
-    "大陸": {
-        "PVG": "上海浦東", "SHA": "上海虹橋", "PEK": "北京首都", 
-        "CAN": "廣州", "SZX": "深圳", "XMN": "廈門", "CTU": "成都天府", 
-        "CKG": "重慶", "WUH": "武漢"
     }
 }
 
@@ -153,17 +148,15 @@ with c_d3:
     d3_dst = st.text_input("D3 抵達", value="TPE").upper()
     d3_date = st.date_input("D3 回程日期", value=date(2026, 6, 25))
 
-# --- 外站接駁 (區間版與雙層選擇器) ---
+# --- 外站接駁 (自動聯動完美版) ---
 st.subheader("🌍 外站接駁與地毯式搜索 (D1 / D4)")
-st.info("💡 快速選擇：先透過上方的「批次全選區域」帶入該區所有城市，接著可以在下方的「細部微調站點」自行增減。")
+st.info("💡 快速選擇：點選上方區域後，下方城市會「自動全選」帶入該區所有站點，你可以再手動踢除不想去的城市。")
 
 c_d1, c_d4 = st.columns(2)
 with c_d1:
     st.markdown("#### 🛫 D1 出發外站")
-    # 區域批次選擇器
-    d1_regions = st.multiselect("🗂️ 批次全選區域 (D1)", ["全部", "東南亞", "東北亞", "港澳", "大陸"], default=["東南亞"], key="d1_reg")
+    d1_regions = st.multiselect("🗂️ 批次全選區域 (D1)", ["全部", "東南亞", "東北亞", "港澳"], default=["東南亞"])
     
-    # 根據選擇的區域，計算預設要顯示的城市
     d1_defaults = []
     if "全部" in d1_regions:
         d1_defaults = ALL_FORMATTED_CITIES
@@ -173,16 +166,19 @@ with c_d1:
                 for code, name in CI_ASIAN_HUBS[r].items():
                     d1_defaults.append(f"{code} ({name})")
                     
-    # 細部微調選擇器 (會根據上方區域自動帶入 default)
-    d1_hubs_raw = st.multiselect("📍 細部微調站點 (D1)", ALL_FORMATTED_CITIES, default=d1_defaults, key="d1_city")
+    # 加入動態 Key，確保區域一換，城市清單強制重置為 Default
+    d1_hubs_raw = st.multiselect(
+        "📍 細部微調站點 (D1)", 
+        ALL_FORMATTED_CITIES, 
+        default=d1_defaults, 
+        key=f"d1_city_{'-'.join(d1_regions)}" 
+    )
     d1_date_range = st.date_input("📅 D1 日期區間", value=(date(2026, 6, 8), date(2026, 6, 10)), key="d1_date")
 
 with c_d4:
     st.markdown("#### 🛬 D4 抵達外站")
-    # 區域批次選擇器
-    d4_regions = st.multiselect("🗂️ 批次全選區域 (D4)", ["全部", "東南亞", "東北亞", "港澳", "大陸"], default=["東南亞"], key="d4_reg")
+    d4_regions = st.multiselect("🗂️ 批次全選區域 (D4)", ["全部", "東南亞", "東北亞", "港澳"], default=["東南亞"])
     
-    # 根據選擇的區域，計算預設要顯示的城市
     d4_defaults = []
     if "全部" in d4_regions:
         d4_defaults = ALL_FORMATTED_CITIES
@@ -192,8 +188,13 @@ with c_d4:
                 for code, name in CI_ASIAN_HUBS[r].items():
                     d4_defaults.append(f"{code} ({name})")
                     
-    # 細部微調選擇器
-    d4_hubs_raw = st.multiselect("📍 細部微調站點 (D4)", ALL_FORMATTED_CITIES, default=d4_defaults, key="d4_city")
+    # 加入動態 Key，確保區域一換，城市清單強制重置為 Default
+    d4_hubs_raw = st.multiselect(
+        "📍 細部微調站點 (D4)", 
+        ALL_FORMATTED_CITIES, 
+        default=d4_defaults, 
+        key=f"d4_city_{'-'.join(d4_regions)}"
+    )
     d4_date_range = st.date_input("📅 D4 日期區間", value=(date(2026, 6, 26), date(2026, 6, 28)), key="d4_date")
 
 c_cab, c_adt = st.columns(2)
@@ -221,7 +222,6 @@ if st.button("🚀 啟動 Booking.com 聯程區間掃描", use_container_width=T
         
         tasks = []
         for h1_raw, h4_raw in product(d1_hubs_raw, d4_hubs_raw):
-            # 取出字串前面的代碼，例如從 "KUL (吉隆坡)" 取出 "KUL"
             h1_code = h1_raw.split(" ")[0]
             h4_code = h4_raw.split(" ")[0]
             
@@ -229,7 +229,6 @@ if st.button("🚀 啟動 Booking.com 聯程區間掃描", use_container_width=T
                 if d1 >= date.today() and d1 < d2_date and d4 > d3_date:
                     tasks.append((h1_code, h1_raw, d1, h4_code, h4_raw, d4))
 
-        # 【Pro 方案專屬】解開單次掃描上限至 1500 組
         MAX_REQUESTS = 1500 
         
         if len(tasks) > MAX_REQUESTS:
@@ -243,7 +242,6 @@ if st.button("🚀 啟動 Booking.com 聯程區間掃描", use_container_width=T
             valid_results = []
             raw_debug_data = []
 
-            # 引擎轉速提升：max_workers 提高到 5
             with ThreadPoolExecutor(max_workers=5) as exe:
                 future_to_task = {
                     exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3], t[4], t[5], d2_org, d2_dst, d2_date, d3_org, d3_dst, d3_date, cabin_choice, adult_count, strict_ci_toggle): t 
