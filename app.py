@@ -8,7 +8,7 @@ from itertools import product
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
-# 0. 介面與金鑰設定 (暴力消毒法)
+# 0. 介面與金鑰設定
 # ==========================================
 st.set_page_config(page_title="華航獵殺器 (Booking API 正式版)", layout="wide")
 st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
@@ -48,7 +48,6 @@ for region, cities in CI_ASIAN_HUBS.items():
 # 1. 🌟 核心引擎：解析與搜尋
 # ==========================================
 def parse_booking_response(raw_data, title, d1, d4, strict_ci):
-    """解析 Booking API 回傳的 JSON (已防爆處理)"""
     try:
         flight_offers = raw_data.get('data', {}).get('flightOffers', [])
         valid_results = []
@@ -59,7 +58,6 @@ def parse_booking_response(raw_data, title, d1, d4, strict_ci):
             
             segments = offer.get('segments', [])
             for seg in segments:
-                # 防爆處理：避免 legs 為空引發 IndexError
                 legs_list = seg.get('legs', [])
                 first_leg = legs_list[0] if len(legs_list) > 0 else {}
                 
@@ -93,11 +91,12 @@ def parse_booking_response(raw_data, title, d1, d4, strict_ci):
             valid_results.sort(key=lambda x: x['total'])
             return valid_results[0]
             
-    except Exception as e:
+    except Exception:
         pass
     return None
 
-def fetch_booking_bundle(h_in_code, h_in_label, d1, h_out_code, h_out_label, d4, d2_dst, d2_date, d3_date, cabin, strict_ci):
+# 引擎更新：接收完整的 d2_org, d2_dst, d3_org, d3_dst
+def fetch_booking_bundle(h_in_code, h_in_label, d1, h_out_code, h_out_label, d4, d2_org, d2_dst, d2_date, d3_org, d3_dst, d3_date, cabin, strict_ci):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     
     headers = {
@@ -107,11 +106,12 @@ def fetch_booking_bundle(h_in_code, h_in_label, d1, h_out_code, h_out_label, d4,
     
     c_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
     
+    # 完美還原開口程邏輯
     legs = [
-        {"fromId": f"{h_in_code}.AIRPORT", "toId": "TPE.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
-        {"fromId": "TPE.AIRPORT", "toId": f"{d2_dst}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
-        {"fromId": f"{d2_dst}.AIRPORT", "toId": "TPE.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
-        {"fromId": "TPE.AIRPORT", "toId": f"{h_out_code}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}
+        {"fromId": f"{h_in_code}.AIRPORT", "toId": f"{d2_org}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
+        {"fromId": f"{d2_org}.AIRPORT", "toId": f"{d2_dst}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
+        {"fromId": f"{d3_org}.AIRPORT", "toId": f"{d3_dst}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
+        {"fromId": f"{d3_dst}.AIRPORT", "toId": f"{h_out_code}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}
     ]
     
     querystring = {
@@ -138,7 +138,7 @@ def fetch_booking_bundle(h_in_code, h_in_label, d1, h_out_code, h_out_label, d4,
         except Exception as e:
             return {"status": "error", "error": str(e)}
             
-    return {"status": "error", "error": "HTTP 429 Limit Exceeded (重試達上限)"}
+    return {"status": "error", "error": "HTTP 429 Limit Exceeded"}
 
 # ==========================================
 # 2. UI 面板
@@ -152,13 +152,16 @@ with c_toggles[0]:
 with c_toggles[1]:
     debug_mode = st.checkbox("🛠️ 開啟 Debug 模式 (顯示原始 JSON)", value=False) 
 
-# --- 核心行程 (D2 / D3) ---
-st.subheader("📌 核心行程 (台灣往返目的地)")
+# --- 核心行程 (完整還原 D2 / D3 開口程) ---
+st.subheader("📌 核心行程 (D2 / D3)")
 c_d2, c_d3 = st.columns(2)
 with c_d2:
-    d2_dst = st.text_input("D2 抵達城市 (例如: PRG, MXP, FRA)", value="PRG").upper()
-    d2_date = st.date_input("D2 出發日期", value=date(2026, 6, 11))
+    d2_org = st.text_input("D2 出發", value="TPE").upper()
+    d2_dst = st.text_input("D2 抵達", value="PRG").upper()
+    d2_date = st.date_input("D2 去程日期", value=date(2026, 6, 11))
 with c_d3:
+    d3_org = st.text_input("D3 出發", value="FRA").upper()
+    d3_dst = st.text_input("D3 抵達", value="TPE").upper()
     d3_date = st.date_input("D3 回程日期", value=date(2026, 6, 25))
 
 # --- 外站接駁 (D1 / D4) ---
@@ -199,7 +202,6 @@ if st.button("🚀 啟動 Booking.com 獵殺引擎", use_container_width=True):
         for h1_raw, h4_raw in product(d1_hubs_raw, d4_hubs_raw):
             h1_code, h4_code = h1_raw.split(" ")[0], h4_raw.split(" ")[0]
             for d1, d4 in product(d1_dates, d4_dates):
-                # 防雷修復：改為 <= 與 >=，允許完美銜接的同日轉機
                 if d1 <= d2_date and d4 >= d3_date: 
                     tasks.append((h1_code, h1_raw, d1, h4_code, h4_raw, d4))
 
@@ -214,8 +216,9 @@ if st.button("🚀 啟動 Booking.com 獵殺引擎", use_container_width=True):
             raw_debug_data = []
 
             with ThreadPoolExecutor(max_workers=5) as exe:
+                # 把 d2_org, d2_dst, d3_org, d3_dst 全部送進去！
                 future_to_task = {
-                    exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3], t[4], t[5], d2_dst, d2_date, d3_date, cabin_choice, strict_ci_toggle): t 
+                    exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3], t[4], t[5], d2_org, d2_dst, d2_date, d3_org, d3_dst, d3_date, cabin_choice, strict_ci_toggle): t 
                     for t in tasks
                 }
                 
@@ -227,7 +230,6 @@ if st.button("🚀 啟動 Booking.com 獵殺引擎", use_container_width=True):
                         if debug_mode: raw_debug_data.append(res["raw"])
                         if res["offer"]: valid_results.append(res["offer"])
                     else:
-                        # 防雷修復：將 API 的錯誤實時反饋出來
                         st.toast(f"⚠️ 某組查詢失敗: {res.get('error')}")
 
             pb.empty()
