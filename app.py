@@ -7,7 +7,7 @@ import time
 # --- 隱藏網頁元素 ---
 st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
 
-# 🌟 引擎 A：多點搜尋 (歐洲主幹)
+# 🌟 引擎 A：多點搜尋 (歐洲主幹，A進B出，嚴格過濾華航)
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_europe_main_legs(leg1_from, leg1_to, d1, leg2_from, leg2_to, d2, cabin_class, adults, children, infants):
     api_key = "dce25cdb5amshe2e8ea332763a58p1ca56ajsna52ab815ea5a"
@@ -67,7 +67,7 @@ def fetch_europe_main_legs(leg1_from, leg1_to, d1, leg2_from, leg2_to, d2, cabin
     except Exception as e:
         return {"status": f"❌ 系統錯誤", "total_price": 0, "legs": []}
 
-# 🌟 引擎 B：單程搜尋 (外站掃描)
+# 🌟 引擎 B：單程搜尋 (外站掃描，嚴格過濾華航)
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_asia_outer_legs(origin, dest, date, cabin_class):
     api_key = "dce25cdb5amshe2e8ea332763a58p1ca56ajsna52ab815ea5a"
@@ -77,7 +77,7 @@ def fetch_asia_outer_legs(origin, dest, date, cabin_class):
     headers = {"x-rapidapi-key": api_key, "x-rapidapi-host": "flights-sky.p.rapidapi.com"}
 
     try:
-        time.sleep(0.5) # 放慢腳步避免被當成駭客
+        time.sleep(0.5) # 放慢腳步避免被擋
         response = requests.get(url, headers=headers, params=params, timeout=12)
         if response.status_code == 429:
             return {"base_price": 0, "status": "❌ API額度耗盡", "info": ""}
@@ -114,7 +114,7 @@ def calc_family(base_price, adults, children, infants):
     return (base_price * adults) + (int(base_price * 0.75) * children) + (int(base_price * 0.10) * infants)
 
 # --- App 介面 ---
-st.title("✈️ 華航外站神仙組合尋找器")
+st.title("✈️ 華航外站全境盲掃神器")
 
 st.subheader("🗓️ 行程與艙等設定")
 c_dest1, c_dest2 = st.columns(2)
@@ -127,23 +127,29 @@ with c_dest2:
 
 cabin_choice = st.selectbox("💺 選擇艙等", ["商務艙", "豪經艙", "經濟艙"])
 
-st.subheader("🌏 選擇交叉掃描的樞紐 (建議保持在 8 個以內)")
+st.subheader("🌏 選擇交叉掃描的樞紐 (建議每次勾選 8-10 個以內運算)")
 selected_hubs = st.multiselect(
-    "已為您預選 8 個最常出現破盤價的黃金樞紐：",
-    ["FUK", "KIX", "NRT", "ICN", "BKK", "KUL", "MNL", "SGN", "PEN", "CGK", "DPS", "OKA", "CTS"],
-    default=["FUK", "KIX", "NRT", "BKK", "KUL", "MNL", "SGN", "ICN"]
+    "華航全亞洲 22 大航點完整收錄！(包含釜山 PUS)：",
+    [
+        "FUK", "KIX", "NRT", "NGO", "CTS", "OKA",  # 日本
+        "ICN", "PUS", "HKG", "MFM",                # 韓港澳
+        "BKK", "CNX", "SIN", "KUL", "PEN",         # 東南亞(新馬泰)
+        "MNL", "CEB", "SGN", "HAN", "DAD",         # 菲律賓、越南
+        "CGK", "DPS"                               # 印尼
+    ],
+    default=["FUK", "KIX", "NRT", "PUS", "BKK", "KUL", "MNL", "SGN"]
 )
 
 st.subheader("👥 旅行成員")
 c1, c2, c3 = st.columns(3)
-with c1: adults = st.number_input("大人", value=1)
-with c2: children = st.number_input("兒童", value=0)
-with c3: infants = st.number_input("嬰兒", value=0)
+with c1: adults = st.number_input("大人", value=2)
+with c2: children = st.number_input("兒童", value=1)
+with c3: infants = st.number_input("嬰兒", value=1)
 
 
 if st.button("🚀 啟動黃金樞紐交叉比對", use_container_width=True):
     if not selected_hubs:
-        st.warning("請至少選擇一個外站！")
+        st.warning("請至少選擇一個外站喔！")
     else:
         progress_bar = st.progress(0, text="📡 正在獲取歐洲長程主段基準票價...")
         results = []
@@ -155,7 +161,7 @@ if st.button("🚀 啟動黃金樞紐交叉比對", use_container_width=True):
             if "額度耗盡" in europe_main['status']:
                 st.error("🚨 警告：您的 API 呼叫額度可能已經用盡，請至 RapidAPI 確認您的訂閱狀態！")
             else:
-                st.error(f"⚠️ 歐洲主幹段查無純華航機票！")
+                st.error(f"⚠️ 歐洲主幹段查無純華航機票！(可能是商務艙該日已售罄)")
         else:
             europe_total_price = europe_main['total_price']
             st.info(f"🌸 已鎖定華航歐洲長程真實總價：**NT$ {europe_total_price:,}**。")
@@ -175,7 +181,6 @@ if st.button("🚀 啟動黃金樞紐交叉比對", use_container_width=True):
                 s1_res = fetch_asia_outer_legs(hub, "TPE", d1_date, cabin_choice)
                 s4_res = fetch_asia_outer_legs("TPE", hub, d4_date, cabin_choice)
                 
-                # 🛡️ 煞車機制：只要出現額度耗盡，立刻停止迴圈
                 if "額度耗盡" in s1_res['status'] or "額度耗盡" in s4_res['status']:
                     rate_limit_hit = True
                     break
