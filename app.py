@@ -17,21 +17,35 @@ except KeyError:
     st.error("🚨 系統找不到 Booking API 金鑰！請確認您已在 Streamlit 後台的 Secrets 中設定了 BOOKING_API_KEY。")
     st.stop()
 
-# 🌍 升級版：加上區域與中文名稱，大幅提升選取直覺度
-ALL_HUBS = [
-    "【東南亞】 KUL (吉隆坡)",
-    "【東南亞】 BKK (曼谷)",
-    "【東南亞】 SIN (新加坡)",
-    "【東南亞】 SGN (胡志明市)",
-    "【東南亞】 CGK (雅加達)",
-    "【東南亞】 DPS (峇里島)",
-    "【東南亞】 MNL (馬尼拉)",
-    "【東北亞】 ICN (首爾)",
-    "【東北亞】 PUS (釜山)",
-    "【東北亞】 NRT (東京成田)",
-    "【東北亞】 FUK (福岡)",
-    "【港澳】 HKG (香港)"
-]
+# 🌍 華航全亞洲站點資料庫
+CI_ASIAN_HUBS = {
+    "東南亞": {
+        "BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", 
+        "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", 
+        "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", 
+        "PNH": "金邊", "RGN": "仰光"
+    },
+    "東北亞": {
+        "NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", 
+        "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "TAK": "高松", 
+        "HIJ": "廣島", "KOJ": "鹿兒島", "KMQ": "小松", "TOY": "富山",
+        "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"
+    },
+    "港澳": {
+        "HKG": "香港", "MFM": "澳門"
+    },
+    "大陸": {
+        "PVG": "上海浦東", "SHA": "上海虹橋", "PEK": "北京首都", 
+        "CAN": "廣州", "SZX": "深圳", "XMN": "廈門", "CTU": "成都天府", 
+        "CKG": "重慶", "WUH": "武漢"
+    }
+}
+
+# 產生扁平化的全部站點清單 (格式: "KUL (吉隆坡)")
+ALL_FORMATTED_CITIES = []
+for region, cities in CI_ASIAN_HUBS.items():
+    for code, name in cities.items():
+        ALL_FORMATTED_CITIES.append(f"{code} ({name})")
 
 # ==========================================
 # 1. 🌟 引擎：Booking.com 四段聯程精算
@@ -46,7 +60,6 @@ def fetch_booking_bundle(h_in_code, h_in_label, d1, h_out_code, h_out_label, d4,
     
     c_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
     
-    # 這裡送給 API 的會是乾淨的三碼 (如 KUL.AIRPORT)
     legs = [
         {"fromId": f"{h_in_code}.AIRPORT", "toId": "TPE.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
         {"fromId": "TPE.AIRPORT", "toId": f"{d2_d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
@@ -60,7 +73,6 @@ def fetch_booking_bundle(h_in_code, h_in_label, d1, h_out_code, h_out_label, d4,
         "currency_code": "TWD" 
     }
     
-    # 顯示給使用者看的會是完整的中文標籤
     bundle_title = f"{h_in_label} ➔ {h_out_label}"
     
     try:
@@ -75,7 +87,7 @@ def fetch_booking_bundle(h_in_code, h_in_label, d1, h_out_code, h_out_label, d4,
         return {"status": "error", "error": str(e)}
 
 def parse_booking_response(raw_data, title, d1, d4, strict_ci):
-    """解析 Booking API 回傳的 JSON (待用 Debug 模式校準)"""
+    """解析 Booking API 回傳的 JSON"""
     try:
         flights = raw_data.get('data', [])
         if isinstance(flights, dict):
@@ -141,18 +153,48 @@ with c_d3:
     d3_dst = st.text_input("D3 抵達", value="TPE").upper()
     d3_date = st.date_input("D3 回程日期", value=date(2026, 6, 25))
 
-# --- 外站接駁 (區間版) ---
+# --- 外站接駁 (區間版與雙層選擇器) ---
 st.subheader("🌍 外站接駁與地毯式搜索 (D1 / D4)")
-st.info("💡 支援區間選擇！下拉選單已按區域分類，支援跨區多選大亂鬥。")
+st.info("💡 快速選擇：先透過上方的「批次全選區域」帶入該區所有城市，接著可以在下方的「細部微調站點」自行增減。")
 
 c_d1, c_d4 = st.columns(2)
 with c_d1:
-    d1_hubs_raw = st.multiselect("D1 出發城市", ALL_HUBS, default=["【東南亞】 KUL (吉隆坡)"])
-    d1_date_range = st.date_input("D1 日期區間", value=(date(2026, 6, 8), date(2026, 6, 10)))
+    st.markdown("#### 🛫 D1 出發外站")
+    # 區域批次選擇器
+    d1_regions = st.multiselect("🗂️ 批次全選區域 (D1)", ["全部", "東南亞", "東北亞", "港澳", "大陸"], default=["東南亞"], key="d1_reg")
+    
+    # 根據選擇的區域，計算預設要顯示的城市
+    d1_defaults = []
+    if "全部" in d1_regions:
+        d1_defaults = ALL_FORMATTED_CITIES
+    else:
+        for r in d1_regions:
+            if r in CI_ASIAN_HUBS:
+                for code, name in CI_ASIAN_HUBS[r].items():
+                    d1_defaults.append(f"{code} ({name})")
+                    
+    # 細部微調選擇器 (會根據上方區域自動帶入 default)
+    d1_hubs_raw = st.multiselect("📍 細部微調站點 (D1)", ALL_FORMATTED_CITIES, default=d1_defaults, key="d1_city")
+    d1_date_range = st.date_input("📅 D1 日期區間", value=(date(2026, 6, 8), date(2026, 6, 10)), key="d1_date")
 
 with c_d4:
-    d4_hubs_raw = st.multiselect("D4 抵達城市", ALL_HUBS, default=["【東南亞】 KUL (吉隆坡)"])
-    d4_date_range = st.date_input("D4 日期區間", value=(date(2026, 6, 26), date(2026, 6, 28)))
+    st.markdown("#### 🛬 D4 抵達外站")
+    # 區域批次選擇器
+    d4_regions = st.multiselect("🗂️ 批次全選區域 (D4)", ["全部", "東南亞", "東北亞", "港澳", "大陸"], default=["東南亞"], key="d4_reg")
+    
+    # 根據選擇的區域，計算預設要顯示的城市
+    d4_defaults = []
+    if "全部" in d4_regions:
+        d4_defaults = ALL_FORMATTED_CITIES
+    else:
+        for r in d4_regions:
+            if r in CI_ASIAN_HUBS:
+                for code, name in CI_ASIAN_HUBS[r].items():
+                    d4_defaults.append(f"{code} ({name})")
+                    
+    # 細部微調選擇器
+    d4_hubs_raw = st.multiselect("📍 細部微調站點 (D4)", ALL_FORMATTED_CITIES, default=d4_defaults, key="d4_city")
+    d4_date_range = st.date_input("📅 D4 日期區間", value=(date(2026, 6, 26), date(2026, 6, 28)), key="d4_date")
 
 c_cab, c_adt = st.columns(2)
 with c_cab: cabin_choice = st.selectbox("艙等", ["商務艙", "豪經艙", "經濟艙"])
@@ -165,7 +207,7 @@ if st.button("🚀 啟動 Booking.com 聯程區間掃描", use_container_width=T
     if len(d1_date_range) != 2 or len(d4_date_range) != 2:
         st.error("⚠️ 請確保 D1 和 D4 都選擇了完整的「開始」與「結束」日期！(需在日曆上點擊兩次)")
     elif not d1_hubs_raw or not d4_hubs_raw:
-        st.error("⚠️ 請至少選擇一個外站！")
+        st.error("⚠️ 請在「細部微調站點」中至少保留一個外站！")
     else:
         msg = st.empty()
         
@@ -179,9 +221,9 @@ if st.button("🚀 啟動 Booking.com 聯程區間掃描", use_container_width=T
         
         tasks = []
         for h1_raw, h4_raw in product(d1_hubs_raw, d4_hubs_raw):
-            # 從 "【東南亞】 KUL (吉隆坡)" 中萃取出 "KUL" 以供 API 使用
-            h1_code = h1_raw.split(" ")[1]
-            h4_code = h4_raw.split(" ")[1]
+            # 取出字串前面的代碼，例如從 "KUL (吉隆坡)" 取出 "KUL"
+            h1_code = h1_raw.split(" ")[0]
+            h4_code = h4_raw.split(" ")[0]
             
             for d1, d4 in product(d1_dates, d4_dates):
                 if d1 >= date.today() and d1 < d2_date and d4 > d3_date:
@@ -203,7 +245,6 @@ if st.button("🚀 啟動 Booking.com 聯程區間掃描", use_container_width=T
 
             # 引擎轉速提升：max_workers 提高到 5
             with ThreadPoolExecutor(max_workers=5) as exe:
-                # 注意這裡傳遞參數的變化，把 code 和 label 都傳進去
                 future_to_task = {
                     exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3], t[4], t[5], d2_org, d2_dst, d2_date, d3_org, d3_dst, d3_date, cabin_choice, adult_count, strict_ci_toggle): t 
                     for t in tasks
@@ -230,7 +271,6 @@ if st.button("🚀 啟動 Booking.com 聯程區間掃描", use_container_width=T
                 valid_results.sort(key=lambda x: x['total'])
                 
                 for r in valid_results[:20]:
-                    # 這裡的 r['title'] 現在會漂亮地顯示如: 【東南亞】 KUL (吉隆坡) ➔ 【東北亞】 NRT (東京成田)
                     with st.expander(f"✅ {r['title']} | D1: {r['d1']} & D4: {r['d4']} ➔ 總價: {r['total']:,} {r['currency']}"):
                         for i, leg in enumerate(r['legs'], 1): 
                             st.write(f"{i}️⃣ {leg}")
