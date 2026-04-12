@@ -6,65 +6,79 @@ import time
 # --- 隱藏網頁元素 ---
 st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}</style>", unsafe_allow_html=True)
 
-# 🌟 核心資料抓取：支援全亞洲航點掃描 + 抓取航班資訊
+# 🌟 終極引擎：多個城市打包搜尋 (真實開票總價)
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_base_flight_data(origin, dest, date, cabin_class):
+def fetch_multi_city_flights(hub, out_dest, in_origin, d1, d2, d3, d4, cabin_class, adults, children, infants):
     api_key = "dce25cdb5amshe2e8ea332763a58p1ca56ajsna52ab815ea5a"
-    url = "https://flights-sky.p.rapidapi.com/flights/search-one-way"
+    url = "https://flights-sky.p.rapidapi.com/flights/search-multi-city"
     
     cabin_mapping = {"經濟艙": "economy", "豪經艙": "premiumeconomy", "商務艙": "business"}
     
-    params = {
-        "fromEntityId": origin, 
-        "toEntityId": dest, 
-        "departDate": date, 
-        "adults": "1", 
-        "currency": "TWD", 
-        "cabinClass": cabin_mapping[cabin_class]
+    # 按照 API 規定的 JSON 格式打包 4 段票與所有乘客
+    payload = {
+        "market": "TW",
+        "locale": "zh-TW",
+        "currency": "TWD",
+        "adults": int(adults),
+        "children": int(children),
+        "infants": int(infants),
+        "cabinClass": cabin_mapping[cabin_class],
+        "sort": "cheapest_first",
+        "flights": [
+            {"fromEntityId": hub, "toEntityId": "TPE", "departDate": d1},
+            {"fromEntityId": "TPE", "toEntityId": out_dest, "departDate": d2},
+            {"fromEntityId": in_origin, "toEntityId": "TPE", "departDate": d3},
+            {"fromEntityId": "TPE", "toEntityId": hub, "departDate": d4}
+        ]
     }
     
     headers = {
         "x-rapidapi-key": api_key,
-        "x-rapidapi-host": "flights-sky.p.rapidapi.com"
+        "x-rapidapi-host": "flights-sky.p.rapidapi.com",
+        "Content-Type": "application/json"
     }
 
     try:
-        # 付費版可稍微縮短延遲
-        time.sleep(0.3) 
-        response = requests.get(url, headers=headers, params=params, timeout=12)
+        time.sleep(1) # 等待 1 秒避免被擋
+        # 注意：這裡改用 requests.post，並設定 timeout 為 30 秒讓長程商務艙有時間跑
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
         response.raise_for_status() 
         data = response.json()
         
-        # 🎯 提取價格
-        itinerary = data['data']['itineraries'][0]
-        real_price = itinerary['price']['raw']
-        
-        # 🎯 提取航班資訊 (航空公司、編號、出發時間)
-        try:
-            leg = itinerary['legs'][0]
-            carriers = leg.get('carriers', {}).get('marketing', [])
-            carrier_name = carriers[0].get('name', '中華航空') if carriers else '中華航空'
-            flight_number = leg.get('segments', [{}])[0].get('flightNumber', '')
-            dep_time = leg.get('departure', '')
-            if 'T' in dep_time:
-                dep_time = dep_time.split('T')[1][:5]
-            else:
-                dep_time = ""
-            flight_info = f" ({carrier_name} {flight_number} | {dep_time} 出發)" if dep_time else f" ({carrier_name} {flight_number})"
-        except:
-            flight_info = " (華航直飛/天合聯盟)"
-            
-        miles = 4500 if "PRG" in [origin, dest] or "FRA" in [origin, dest] or "ZRH" in [origin, dest] else 1000
-        return {"base_price": int(real_price), "status": "✅ API即時報價", "info": flight_info, "miles": miles}
-    except:
-        return {"base_price": 999999, "status": "❌ 查無航班", "info": " (無航班資訊)", "miles": 0}
+        if not data.get('data') or not data['data'].get('itineraries'):
+             return {"status": "❌ 查無航班或售罄", "total_price": 0, "legs": []}
 
-def calculate_family_price(base_price, adults, children, infants):
-    total = (base_price * adults) + (int(base_price * 0.75) * children) + (int(base_price * 0.10) * infants)
-    return total
+        # 🎯 抓取真實的「全家總結帳金額」
+        itinerary = data['data']['itineraries'][0]
+        real_total_price = itinerary['price']['raw']
+        
+        # 🎯 依序抓取 4 段航班的明細
+        flight_details = []
+        for i in range(4):
+            try:
+                leg = itinerary['legs'][i]
+                carriers = leg.get('carriers', {}).get('marketing', [])
+                carrier_name = carriers[0].get('name', '中華航空') if carriers else '中華航空'
+                flight_number = leg.get('segments', [{}])[0].get('flightNumber', '')
+                dep_time = leg.get('departure', '')
+                if 'T' in dep_time:
+                    dep_time = dep_time.split('T')[1][:5]
+                flight_details.append(f"{carrier_name} {flight_number} | {dep_time} 出發")
+            except:
+                flight_details.append("無詳細航班資訊")
+                
+        miles = (4500 * 2 + 1000 * 2) * adults # 預估 2長2短 的總里程
+        return {"status": "✅ 成功", "total_price": int(real_total_price), "legs": flight_details, "miles": miles}
+        
+    except requests.exceptions.Timeout:
+        return {"status": "❌ 連線超時", "total_price": 0, "legs": []}
+    except Exception as e:
+        return {"status": f"❌ 系統錯誤", "total_price": 0, "legs": []}
+
 
 # --- App 介面 ---
-st.title("✈️ 華航全亞洲外站掃描器 (Pro 完整明細版)")
+st.title("✈️ 華航外站四段票神器 (終極完全體)")
+st.markdown("🔥 **100% 抓取 Skyscanner 多點搜尋真實開票總價**")
 
 st.subheader("🗓️ 行程與艙等設定")
 c_dest1, c_dest2 = st.columns(2)
@@ -77,84 +91,59 @@ with c_dest2:
 
 cabin_choice = st.selectbox("💺 選擇艙等", ["商務艙", "豪經艙", "經濟艙"])
 
-# 🌏 全亞洲主要樞紐清單
-asia_hubs = [
-    "NRT", "KIX", "NGO", "FUK", "CTS", "OKA",  
-    "ICN", "PVG", "SHA", "PEK", "HKG", "MFM",  
-    "BKK", "SIN", "KUL", "MNL", "SGN", "HAN",  
-    "CGK", "DPS", "PEN", "CNX"                 
-]
-
 st.subheader("👥 旅行成員")
 c1, c2, c3 = st.columns(3)
 with c1: adults = st.number_input("大人", value=2)
 with c2: children = st.number_input("兒童", value=1)
 with c3: infants = st.number_input("嬰兒", value=1)
 
-if st.button("🚀 執行全亞洲最低價精算", use_container_width=True):
-    with st.spinner('正在分析全亞洲所有可能的起訖點組合，並抓取航班時間...'):
+# 🌏 預設測這 5 個亞洲最強樞紐
+test_hubs = ["FUK", "KUL", "BKK", "MNL", "NRT"] 
+
+if st.button("🚀 執行多點搜尋 (獲取真實家庭總價)", use_container_width=True):
+    with st.spinner('正在打包 4 段航班向系統報價... (每個外站約需 15~20 秒)'):
         results = []
         
-        # 先抓取固定不變的第二段(長程去)與第三段(長程回)
-        # 放在迴圈外可以省下大量的 API 呼叫次數跟等待時間！
-        s2 = fetch_base_flight_data("TPE", out_dest, date_out.strftime("%Y-%m-%d"), cabin_choice)
-        s3 = fetch_base_flight_data(in_origin, "TPE", date_in.strftime("%Y-%m-%d"), cabin_choice)
-        
-        # 如果長程段查不到，直接報錯停止
-        if s2['status'] == "❌ 查無航班" or s3['status'] == "❌ 查無航班":
-            st.error(f"⚠️ 指定的日期 ({date_out.strftime('%m/%d')} 或 {date_in.strftime('%m/%d')}) 查不到飛往歐洲的機票，請換個日期試試！")
+        for hub in test_hubs:
+            d1_date = (date_out - timedelta(days=45)).strftime("%Y-%m-%d")
+            d2_date = date_out.strftime("%Y-%m-%d")
+            d3_date = date_in.strftime("%Y-%m-%d")
+            d4_date = (date_in + timedelta(days=45)).strftime("%Y-%m-%d")
+            
+            # 發送多點搜尋請求
+            res = fetch_multi_city_flights(
+                hub, out_dest, in_origin, 
+                d1_date, d2_date, d3_date, d4_date, 
+                cabin_choice, adults, children, infants
+            )
+            
+            if "✅" in res['status']:
+                details_text = [
+                    f"第一段 **{d1_date}** | {hub} ✈️ TPE ({res['legs'][0]})",
+                    f"第二段 **{d2_date}** | TPE ✈️ {out_dest} ({res['legs'][1]})",
+                    f"第三段 **{d3_date}** | {in_origin} ✈️ TPE ({res['legs'][2]})",
+                    f"第四段 **{d4_date}** | TPE ✈️ {hub} ({res['legs'][3]})"
+                ]
+
+                results.append({
+                    "hub": hub, 
+                    "total": res['total_price'], 
+                    "miles": res['miles'],
+                    "details": details_text
+                })
+
+        if results:
+            # 依照真實總價進行排序
+            top_results = sorted(results, key=lambda x: x['total'])
+            st.success(f"🎉 報價完成！這就是您 {adults}大{children}小{infants}嬰 的真實刷卡總價：")
+            
+            for i, res in enumerate(top_results, 1):
+                with st.expander(f"🏆 第 {i} 名：{res['hub']} 起降 ➔ 總結帳 NT$ {res['total']:,}"):
+                    st.markdown(f"**🔥 真實開票總價：<span style='color:red; font-size:20px'>NT$ {res['total']:,}</span>**", unsafe_allow_html=True)
+                    st.write(f"📈 預估累積華夏哩程：{res['miles']:,} 哩")
+                    st.markdown("---")
+                    st.markdown("**✈️ 實際航班明細：**")
+                    for info in res['details']:
+                        st.write(f"• {info}")
         else:
-            # 只針對第一段與第四段進行全亞洲交叉掃描
-            for hub in asia_hubs:
-                d1_date = (date_out - timedelta(days=45)).strftime("%Y-%m-%d")
-                d4_date = (date_in + timedelta(days=45)).strftime("%Y-%m-%d")
-                
-                s1 = fetch_base_flight_data(hub, "TPE", d1_date, cabin_choice)
-                s4 = fetch_base_flight_data("TPE", hub, d4_date, cabin_choice)
-                
-                # 只有當前後兩段都成功抓到航班時才計算
-                if "✅" in s1['status'] and "✅" in s4['status']:
-                    f1 = calculate_family_price(s1['base_price'], adults, children, infants)
-                    f2 = calculate_family_price(s2['base_price'], adults, children, infants)
-                    f3 = calculate_family_price(s3['base_price'], adults, children, infants)
-                    f4 = calculate_family_price(s4['base_price'], adults, children, infants)
-                    
-                    separate_total = f1 + f2 + f3 + f4
-                    together_total = int((f2 + f3) * 0.85 + (f1 + f4) * 0.15)
-                    savings = separate_total - together_total
-                    total_miles = (s1['miles'] + s2['miles'] + s3['miles'] + s4['miles']) * adults
-
-                    # 🎯 將四段完整資訊組合起來
-                    details_text = [
-                        f"第一段 **{d1_date}** | {hub} ✈️ TPE {s1['info']} | 單買原價 NT$ {f1:,}",
-                        f"第二段 **{date_out.strftime('%Y-%m-%d')}** | TPE ✈️ {out_dest} {s2['info']} | 單買原價 NT$ {f2:,}",
-                        f"第三段 **{date_in.strftime('%Y-%m-%d')}** | {in_origin} ✈️ TPE {s3['info']} | 單買原價 NT$ {f3:,}",
-                        f"第四段 **{d4_date}** | TPE ✈️ {hub} {s4['info']} | 單買原價 NT$ {f4:,}"
-                    ]
-
-                    results.append({
-                        "hub": hub, 
-                        "together": together_total, 
-                        "separate": separate_total, 
-                        "savings": savings,
-                        "miles": total_miles,
-                        "details": details_text
-                    })
-
-            # 如果有找到結果，就進行排名並顯示
-            if results:
-                top_5 = sorted(results, key=lambda x: x['together'])[:5]
-                st.success(f"🎉 掃描完成！找到全亞洲前 5 名最便宜的外站組合：")
-                
-                for i, res in enumerate(top_5, 1):
-                    with st.expander(f"🏆 第 {i} 名：{res['hub']} 起降 ➔ 四段合買預估 NT$ {res['together']:,}"):
-                        st.markdown(f"**🔥 四段合買預估價：<span style='color:red; font-size:20px'>NT$ {res['together']:,}</span>**", unsafe_allow_html=True)
-                        st.write(f"🛑 傳統分開單買總價：NT$ {res['separate']:,}")
-                        st.write(f"🤑 總共為您省下：**NT$ {res['savings']:,}**")
-                        st.write(f"📈 預估累積華夏哩程：{res['miles']:,} 哩")
-                        st.markdown("---")
-                        st.markdown("**各段單買原價與航班明細：**")
-                        for info in res['details']:
-                            st.write(f"• {info}")
-            else:
-                st.warning("⚠️ 掃描完畢，但在您指定的時間區間內，沒有找到完美的四段票組合。")
+            st.error("⚠️ 掃描完畢，所有外站都遇到查無機票或連線超時的狀況。這通常代表該日期商務艙已完全售罄，或 API 仍在維護中。")
