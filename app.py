@@ -3,53 +3,44 @@ import requests
 import json
 import time
 import random
-import gc  
+import gc
+import os
 from datetime import datetime, timedelta, date
 from itertools import product
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
-# 0. 企業級 UI 與金鑰設定
+# 0. 企業級 UI、金鑰與黑盒子設定
 # ==========================================
 st.set_page_config(page_title="Flight Actuary | 華航外站獵殺器", page_icon="✈️", layout="wide")
+
+# 黑盒子實體檔案路徑
+BLACKBOX_FILE = "blackbox_log.jsonl"
 
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
-    
     [data-testid="stAppViewContainer"], .stApp {
         background-image: linear-gradient(rgba(15, 20, 35, 0.2), rgba(15, 20, 35, 0.5)), 
         url("https://images.unsplash.com/photo-1436491865332-7a61a109cc05?q=80&w=2074&auto=format&fit=crop");
-        background-size: cover !important;
-        background-position: center !important;
-        background-attachment: fixed !important;
+        background-size: cover !important; background-position: center !important; background-attachment: fixed !important;
     }
-    
     [data-testid="stExpander"] {
-        background-color: rgba(20, 35, 55, 0.6) !important;
-        backdrop-filter: blur(15px) !important;
-        border: 1px solid rgba(255, 255, 255, 0.25) !important;
-        border-radius: 12px !important;
-        box-shadow: 0 10px 40px 0 rgba(0, 0, 0, 0.5) !important;
-        margin-bottom: 15px;
+        background-color: rgba(20, 35, 55, 0.6) !important; backdrop-filter: blur(15px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.25) !important; border-radius: 12px !important;
+        box-shadow: 0 10px 40px 0 rgba(0, 0, 0, 0.5) !important; margin-bottom: 15px;
     }
-    
     .custom-title {
-        background: linear-gradient(45deg, #ffffff, #4da8da);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 900;
-        font-size: 3rem;
-        margin-bottom: -5px;
-        text-shadow: 0px 4px 10px rgba(0,0,0,0.5);
+        background: linear-gradient(45deg, #ffffff, #4da8da); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        font-weight: 900; font-size: 3rem; margin-bottom: -5px; text-shadow: 0px 4px 10px rgba(0,0,0,0.5);
     }
-
     .live-hit {
-        padding: 12px; border-left: 6px solid #00e676; 
-        background: rgba(0, 230, 118, 0.15); 
-        margin-bottom: 12px; border-radius: 8px;
-        color: #ffffff; font-weight: 600;
-        backdrop-filter: blur(5px);
+        padding: 12px; border-left: 6px solid #00e676; background: rgba(0, 230, 118, 0.15); 
+        margin-bottom: 12px; border-radius: 8px; color: #ffffff; font-weight: 600; backdrop-filter: blur(5px);
+    }
+    .rescue-box {
+        padding: 15px; border: 2px dashed #ffb300; background: rgba(255, 179, 0, 0.1); 
+        border-radius: 10px; margin-bottom: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -69,6 +60,36 @@ CI_ASIAN_HUBS = {
 ALL_FORMATTED_CITIES = [f"{code} ({name})" for region, cities in CI_ASIAN_HUBS.items() for code, name in cities.items()]
 
 # ==========================================
+# 0.5 📦 黑盒子資料讀取區 (放在最上方，當機重整立刻看到)
+# ==========================================
+st.markdown('<p class="custom-title">✈️ Flight Actuary Console</p>', unsafe_allow_html=True)
+st.markdown('<p style="color:#cbd5e1; font-weight:600; margin-bottom:25px;">中華航空 (CI) 外站四段聯程・動態獵殺儀表板</p>', unsafe_allow_html=True)
+
+if os.path.exists(BLACKBOX_FILE):
+    try:
+        with open(BLACKBOX_FILE, "r", encoding="utf-8") as f:
+            rescued_data = [json.loads(line) for line in f if line.strip()]
+        
+        if rescued_data:
+            st.markdown("<div class='rescue-box'><h4>📁 墜機搶救紀錄 (黑盒子)</h4><p>系統偵測到您上次執行可能有中斷，以下是當機前成功為您攔截到的特價票：</p></div>", unsafe_allow_html=True)
+            rescued_data.sort(key=lambda x: x['total'])
+            
+            for r in rescued_data[:30]: # 最多顯示前30筆便宜的
+                diff = r.get("ref", 0) - r['total']
+                badge = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省下 {diff:,}</span>" if diff > 0 else f"<span style='color:#ff5252;'>⚠️ 虧損 {abs(diff):,}</span>"
+                with st.expander(f"💾 [備份] 💰 {r['total']:,} TWD | {badge} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})"):
+                    st.markdown(f"**💰 價差精算：** 傳統分開買約 `{r.get('ref', 0):,}` ➔ 隱藏聯程價 `{r['total']:,}`")
+                    st.markdown("---")
+                    for j, leg in enumerate(r['legs'], 1): st.write(f"**航段 {j}** | {leg}")
+            
+            if st.button("🗑️ 清除黑盒子紀錄 (準備執行全新掃描)"):
+                os.remove(BLACKBOX_FILE)
+                st.rerun()
+            st.markdown("---")
+    except Exception as e:
+        pass
+
+# ==========================================
 # 1. 🌟 核心引擎
 # ==========================================
 def parse_booking_response(raw_data, title, d1, d4, strict_ci):
@@ -80,12 +101,9 @@ def parse_booking_response(raw_data, title, d1, d4, strict_ci):
             for seg in offer.get('segments', []):
                 legs_list = seg.get('legs', [])
                 first_leg = legs_list[0] if len(legs_list) > 0 else {}
-                
-                # 💣 排雷修復：同時抓取實際執飛與銷售航空，避免代碼共享航班被誤殺
                 c_info = first_leg.get('flightInfo', {}).get('carrierInfo', {})
                 carrier = c_info.get('operatingCarrier') or c_info.get('marketingCarrier', '??')
                 f_num = first_leg.get('flightInfo', {}).get('flightNumber', '')
-                
                 dep_code = seg.get('departureAirport', {}).get('code', '???')
                 arr_code = seg.get('arrivalAirport', {}).get('code', '???')
                 dep_time = seg.get('departureTime', '').replace('T', ' ')[:16]
@@ -129,9 +147,6 @@ def fetch_booking_bundle(legs, cabin, strict_ci, title="", d1="", d4="", debug_m
 # ==========================================
 # 2. UI 面板
 # ==========================================
-st.markdown('<p class="custom-title">✈️ Flight Actuary Console</p>', unsafe_allow_html=True)
-st.markdown('<p style="color:#cbd5e1; font-weight:600; margin-bottom:25px;">中華航空 (CI) 外站四段聯程・動態獵殺儀表板</p>', unsafe_allow_html=True)
-
 c_toggles = st.columns(2)
 with c_toggles[0]: strict_ci_toggle = st.checkbox("🔒 嚴格鎖定純華航 (CI) 航班", value=True)
 with c_toggles[1]: debug_mode = st.checkbox("🛠️ 開啟 Debug 模式", value=False) 
@@ -174,16 +189,15 @@ with c_adt: adult_count = st.number_input("人數", value=1, min_value=1)
 # 3. 執行邏輯 
 # ==========================================
 if st.button("🚀 啟動動態精算獵殺", use_container_width=True):
-    # 💣 排雷修復：防呆日期檢驗，避免陷入無效的死胡同搜尋
-    if len(d1_date_range) != 2 or len(d4_date_range) != 2: 
-        st.error("⚠️ 日期區間未填寫完整。"); st.stop()
-    if d2_date >= d3_date:
-        st.error("⚠️ 邏輯錯誤：D2 去程日期必須早於 D3 回程日期！"); st.stop()
-    if d1_date_range[0] > d2_date or d4_date_range[1] < d3_date:
-        st.error("⚠️ 邏輯錯誤：D1 出發日不能晚於 D2；D4 抵達日不能早於 D3！"); st.stop()
-    if not d1_hubs_raw or not d4_hubs_raw: 
-        st.error("⚠️ 請至少保留一個 D1 與 D4 的外站城市。"); st.stop()
+    if len(d1_date_range) != 2 or len(d4_date_range) != 2: st.error("⚠️ 日期區間未填寫完整。"); st.stop()
+    if d2_date >= d3_date: st.error("⚠️ D2 去程必須早於 D3 回程！"); st.stop()
+    if d1_date_range[0] > d2_date or d4_date_range[1] < d3_date: st.error("⚠️ D1 不能晚於 D2；D4 不能早於 D3！"); st.stop()
+    if not d1_hubs_raw or not d4_hubs_raw: st.error("⚠️ 請至少保留一個外站。"); st.stop()
     
+    # 每次啟動新搜尋時，清空舊的黑盒子紀錄
+    if os.path.exists(BLACKBOX_FILE):
+        os.remove(BLACKBOX_FILE)
+
     d1_dates = [d1_date_range[0] + timedelta(days=i) for i in range((d1_date_range[1]-d1_date_range[0]).days + 1)]
     d4_dates = [d4_date_range[0] + timedelta(days=i) for i in range((d4_date_range[1]-d4_date_range[0]).days + 1)]
     d1_codes, d4_codes = [h.split(" ")[0] for h in d1_hubs_raw], [h.split(" ")[0] for h in d4_hubs_raw]
@@ -205,11 +219,9 @@ if st.button("🚀 啟動動態精算獵殺", use_container_width=True):
                 all_tasks.append((legs, cabin_choice, strict_ci_toggle, f"{h1_raw} ➔ {h4_raw}", d1, d4, debug_mode, h1_c, h4_c))
 
     total = len(all_tasks)
-    if total == 0: 
-        st.warning("⚠️ 根據您設定的日期，無法產生任何合理的四段票組合。")
-        st.stop()
+    if total == 0: st.warning("⚠️ 無法產生有效的四段票組合。"); st.stop()
 
-    msg = st.warning(f"🔥 任務總數 {total} 組。啟動實時戰報機制，請安心掛機...")
+    msg = st.warning(f"🔥 任務總數 {total} 組。啟動黑盒子實時備份與掃描...")
     pb = st.progress(0)
     live_feed = st.empty()
     valid_results, processed, quota_dead = [], 0, False
@@ -226,14 +238,22 @@ if st.button("🚀 啟動動態精算獵殺", use_container_width=True):
                     res = f.result()
                     if res["status"] == "quota_exceeded": quota_dead = True
                     elif res["status"] == "success" and res["offer"]:
-                        res["offer"]["ref"] = core_baseline_price + baseline_cache[f"{task_meta[7]}_{task_meta[8]}"]
-                        valid_results.append(res["offer"])
-                        diff = res["offer"]["ref"] - res["offer"]['total']
+                        offer_data = res["offer"]
+                        offer_data["ref"] = core_baseline_price + baseline_cache[f"{task_meta[7]}_{task_meta[8]}"]
+                        valid_results.append(offer_data)
+                        
+                        diff = offer_data["ref"] - offer_data['total']
+                        
+                        # 📦 黑盒子寫入：一旦找到，立刻存入實體檔案！
+                        if diff > -20000: # 只存省錢或沒虧太多的票
+                            with open(BLACKBOX_FILE, "a", encoding="utf-8") as file:
+                                file.write(json.dumps(offer_data, ensure_ascii=False) + "\n")
+
                         if diff > 10000:
                             with live_feed.container():
-                                st.markdown(f"<div class='live-hit'>🔔 <b>捕獲高價值票！</b> {res['offer']['title']} | 總價: {res['offer']['total']:,} | <span style='color:#00e676'>現省 {diff:,}</span></div>", unsafe_allow_html=True)
+                                st.markdown(f"<div class='live-hit'>🔔 <b>捕獲高價值票 (已備份)！</b> {offer_data['title']} | 總價: {offer_data['total']:,} | <span style='color:#00e676'>現省 {diff:,}</span></div>", unsafe_allow_html=True)
                 except Exception: pass
-                if processed % 5 == 0: pb.progress(processed / total, text=f"掃描中: {processed}/{total}")
+                if processed % 5 == 0: pb.progress(processed / total, text=f"掃描中: {processed}/{total} (實體備份運作中)")
         gc.collect()
 
     pb.empty(); msg.empty()
@@ -250,6 +270,4 @@ if st.button("🚀 啟動動態精算獵殺", use_container_width=True):
                 st.markdown("---")
                 for j, leg in enumerate(r['legs'], 1): st.write(f"**航段 {j}** | {leg}")
     else: 
-        # 💣 排雷修復：找不到票時給予明確的除錯建議
         st.error("❌ 本次掃描未尋獲符合條件之特價聯程票。")
-        st.info("💡 **駭客建議：**\n1. 嘗試擴大 D1 與 D4 的日期區間 (放寬到 48 小時內)\n2. 關閉「嚴格鎖定純華航」，看看是否有國泰或新航的破盤價\n3. 該檔期可能是該外站的連假旺季，請更換其他區域盲測。")
