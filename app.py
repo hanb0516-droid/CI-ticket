@@ -75,9 +75,13 @@ if os.path.exists(BLACKBOX_FILE):
             
             for r in rescued_data[:50]: 
                 diff = r.get("ref", 0) - r['total']
-                badge = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省下 {diff:,}</span>" if diff > 0 else f"<span style='color:#ff5252;'>⚠️ 虧損 {abs(diff):,}</span>"
-                with st.expander(f"💾 [備份] 💰 {r['total']:,} TWD | {badge} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})"):
-                    st.markdown(f"**💰 價差精算：** 傳統分開買約 `{r.get('ref', 0):,}` ➔ 隱藏聯程價 `{r['total']:,}`")
+                
+                # 🛠️ 亂碼修復：將純文字與 HTML 版本分開
+                badge_plain = f"🔥 狂省 {diff:,}" if diff > 50000 else f"✨ 省下 {diff:,}" if diff > 0 else f"⚠️ 虧損 {abs(diff):,}"
+                badge_html = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省下 {diff:,}</span>" if diff > 0 else f"<span style='color:#ff5252;'>⚠️ 虧損 {abs(diff):,}</span>"
+                
+                with st.expander(f"💾 [備份] 💰 {r['total']:,} TWD | {badge_plain} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})"):
+                    st.markdown(f"**💰 價差精算：** 傳統分開買約 `{r.get('ref', 0):,}` ➔ 隱藏聯程價 `{r['total']:,}` ( {badge_html} )", unsafe_allow_html=True)
                     st.markdown("---")
                     for j, leg in enumerate(r['legs'], 1): st.write(f"**航段 {j}** | {leg}")
             
@@ -146,13 +150,11 @@ def fetch_booking_bundle(legs, cabin, strict_ci, title="", d1="", d4="", debug_m
 # ==========================================
 # 2. UI 面板與動態連動邏輯
 # ==========================================
-# 初始化 Session State (確保第一次載入時有預設值)
 if "d1_city" not in st.session_state:
     st.session_state.d1_city = [f"{c} ({n})" for c, n in CI_ASIAN_HUBS["港澳"].items()]
 if "d4_city" not in st.session_state:
     st.session_state.d4_city = [f"{c} ({n})" for c, n in CI_ASIAN_HUBS["港澳"].items()]
 
-# 強制連動 Callback 函數
 def sync_d1():
     regs = st.session_state.d1_reg
     st.session_state.d1_city = ALL_FORMATTED_CITIES if "全部" in regs else [f"{c} ({n})" for r in regs if r in CI_ASIAN_HUBS for c, n in CI_ASIAN_HUBS[r].items()]
@@ -184,16 +186,12 @@ with c_ref2: fallback_d1d4 = st.number_input("保底 D1/D4 亞洲價", value=250
 st.subheader("🌍 外站雷達 (D1 / D4)")
 c_d1, c_d4 = st.columns(2)
 with c_d1:
-    # 綁定 Callback：只要動了這個選單，就會觸發 sync_d1
     st.multiselect("🗂️ 區域 (D1)", ["全部", "東南亞", "東北亞", "港澳"], default=["港澳"], key="d1_reg", on_change=sync_d1)
-    # 起點庫綁定 Session State，由 sync_d1 控制
     d1_hubs_raw = st.multiselect("📍 D1 起點庫", ALL_FORMATTED_CITIES, key="d1_city")
     d1_date_range = st.date_input("📅 D1 日期", value=(date(2026, 6, 10), date(2026, 6, 11)))
 
 with c_d4:
-    # 綁定 Callback：只要動了這個選單，就會觸發 sync_d4
     st.multiselect("🗂️ 區域 (D4)", ["全部", "東南亞", "東北亞", "港澳"], default=["港澳"], key="d4_reg", on_change=sync_d4)
-    # 終點庫綁定 Session State，由 sync_d4 控制
     d4_hubs_raw = st.multiselect("📍 D4 終點庫", ALL_FORMATTED_CITIES, key="d4_city")
     d4_date_range = st.date_input("📅 D4 日期", value=(date(2026, 6, 25), date(2026, 6, 26)))
 
@@ -261,7 +259,6 @@ if st.button("🚀 啟動動態精算獵殺", use_container_width=True):
                         
                         diff = offer_data["ref"] - offer_data['total']
                         
-                        # 無條件寫入黑盒子
                         with open(BLACKBOX_FILE, "a", encoding="utf-8") as file:
                             file.write(json.dumps(offer_data, ensure_ascii=False) + "\n")
 
@@ -280,9 +277,13 @@ if st.button("🚀 啟動動態精算獵殺", use_container_width=True):
         st.success(f"🎉 獵殺完成！最佳組合已列於下方：")
         for r in valid_results[:50]:
             diff = r["ref"] - r['total']
-            badge = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省下 {diff:,}</span>" if diff > 0 else f"<span style='color:#ff5252;'>⚠️ 虧損 {abs(diff):,}</span>"
-            with st.expander(f"💰 {r['total']:,} TWD | {badge} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})"):
-                st.markdown(f"**💰 價差精算：** 傳統分開買約 `{r['ref']:,}` ➔ 隱藏聯程價 `{r['total']:,}`")
+            
+            # 🛠️ 亂碼修復：最終結果區域也將純文字與 HTML 分開
+            badge_plain = f"🔥 狂省 {diff:,}" if diff > 50000 else f"✨ 省下 {diff:,}" if diff > 0 else f"⚠️ 虧損 {abs(diff):,}"
+            badge_html = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省下 {diff:,}</span>" if diff > 0 else f"<span style='color:#ff5252;'>⚠️ 虧損 {abs(diff):,}</span>"
+            
+            with st.expander(f"💰 {r['total']:,} TWD | {badge_plain} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})"):
+                st.markdown(f"**💰 價差精算：** 傳統分開買約 `{r['ref']:,}` ➔ 隱藏聯程價 `{r['total']:,}` ( {badge_html} )", unsafe_allow_html=True)
                 st.markdown("---")
                 for j, leg in enumerate(r['legs'], 1): st.write(f"**航段 {j}** | {leg}")
     else: 
