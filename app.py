@@ -14,7 +14,7 @@ from itertools import product
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
-# 0. UI 初始化 & 狂暴模式樣式
+# 0. UI 初始化
 # ==========================================
 st.set_page_config(page_title="Flight Actuary | Ultra 獵殺器", page_icon="🚀", layout="wide")
 BLACKBOX_FILE = "blackbox_log.jsonl"
@@ -37,21 +37,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-try:
-    BOOKING_API_KEY = st.secrets["BOOKING_API_KEY"]
-    SENDER = st.secrets.get("EMAIL_SENDER")
-    PWD = st.secrets.get("EMAIL_PASSWORD")
-    RECEIVER = st.secrets.get("EMAIL_RECEIVER")
-except KeyError:
-    st.error("🚨 找不到 Secrets 配置，請檢查 Streamlit 設定。"); st.stop()
-
-if "engine_running" not in st.session_state: st.session_state.engine_running = False
-if "task_list" not in st.session_state: st.session_state.task_list = []
-if "task_idx" not in st.session_state: st.session_state.task_idx = 0
-if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
-if "quota_remaining" not in st.session_state: st.session_state.quota_remaining = "12,000 (Ultra)"
-
-# 🌍 華航全球站點資料庫
+# 🌍 華航站點庫
 CI_GLOBAL_HUBS = {
     "台灣": {"TPE": "台北桃園", "KHH": "高雄小港"},
     "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
@@ -63,6 +49,43 @@ CI_GLOBAL_HUBS = {
 }
 ALL_FORMATTED_CITIES = [f"{code} ({name})" for region, cities in CI_GLOBAL_HUBS.items() for code, name in cities.items()]
 
+# --- 核心邏輯：自動連動函數 ---
+def on_region_change_d1():
+    if st.session_state.input_d1_reg:
+        # 選了區域，自動帶入該區域所有站點
+        new_hubs = [f"{c} ({n})" for r in st.session_state.input_d1_reg for c, n in CI_GLOBAL_HUBS[r].items()]
+        st.session_state.input_d1_hubs = new_hubs
+    else:
+        # 區域清空，起點庫也清空
+        st.session_state.input_d1_hubs = []
+
+def on_region_change_d4():
+    if not st.session_state.input_sync_hubs:
+        if st.session_state.input_d4_reg:
+            new_hubs = [f"{c} ({n})" for r in st.session_state.input_d4_reg for c, n in CI_GLOBAL_HUBS[r].items()]
+            st.session_state.input_d4_hubs = new_hubs
+        else:
+            st.session_state.input_d4_hubs = []
+
+# --- 初始化狀態 ---
+if "input_d1_hubs" not in st.session_state: st.session_state.input_d1_hubs = []
+if "input_d4_hubs" not in st.session_state: st.session_state.input_d4_hubs = []
+if "engine_running" not in st.session_state: st.session_state.engine_running = False
+if "task_list" not in st.session_state: st.session_state.task_list = []
+if "task_idx" not in st.session_state: st.session_state.task_idx = 0
+if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
+if "quota_remaining" not in st.session_state: st.session_state.quota_remaining = "12,000 (Ultra)"
+
+# --- 密鑰讀取 ---
+try:
+    BOOKING_API_KEY = st.secrets["BOOKING_API_KEY"]
+    SENDER = st.secrets.get("EMAIL_SENDER")
+    PWD = st.secrets.get("EMAIL_PASSWORD")
+    RECEIVER = st.secrets.get("EMAIL_RECEIVER")
+except KeyError:
+    st.error("🚨 找不到 Secrets 配置。"); st.stop()
+
+# --- 工具函數 ---
 def get_city_index(code):
     for i, city in enumerate(ALL_FORMATTED_CITIES):
         if city.startswith(code): return i
@@ -74,41 +97,18 @@ def parse_date_range(date_val):
         elif len(date_val) == 1: return date_val[0], date_val[0]
     return date_val, date_val
 
-def send_email_report(res_list):
-    if not SENDER or not PWD or not RECEIVER: return False
-    res_list.sort(key=lambda x: x['total'])
-    txt = "\n".join([f"💰 {r['total']:,} TWD | 🔥 省 {r.get('ref', 200000)-r['total']:,} | {r['title']} (D1:{r['d1']})" for r in res_list])
-    msg = MIMEMultipart()
-    msg['From'], msg['To'], msg['Subject'] = SENDER, RECEIVER, f"🔥 Ultra 獵殺報告 - 捕獲 {len(res_list)} 組"
-    msg.attach(MIMEText("地毯式搜尋完畢，詳細清單見附件。", 'plain'))
-    att = MIMEBase('application', 'octet-stream')
-    att.set_payload(txt.encode('utf-8'))
-    encoders.encode_base64(att)
-    att.add_header('Content-Disposition', f"attachment; filename=Ultra_Results.txt")
-    msg.attach(att)
-    try:
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
-            server.starttls(); server.login(SENDER, PWD); server.send_message(msg)
-        return True
-    except: return False
-
 # ==========================================
-# 1. API 引擎 (Ultra 狂暴輸出版)
+# 1. API 引擎
 # ==========================================
 def fetch_booking_bundle(legs, cabin, title="", d1="", d4=""):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": BOOKING_API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     c_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
-    
-    # Ultra 模式下，我們允許 3 次重試來應對瞬時 429
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             res = requests.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": c_map[cabin], "adults": "1", "currency_code": "TWD"}, timeout=30)
-            
-            # 更新剩餘額度
             rem = res.headers.get('x-ratelimit-requests-remaining')
             if rem: st.session_state.quota_remaining = rem
-
             if res.status_code == 200:
                 raw = res.json()
                 valid_res = []
@@ -125,16 +125,12 @@ def fetch_booking_bundle(legs, cabin, title="", d1="", d4=""):
                         l_sum.append(f"**{car}{num}** | {dep} ➔ {arr} | {dt}")
                     if len(l_sum) == 4:
                         valid_res.append({"title": title, "total": offer.get('priceBreakdown', {}).get('total', {}).get('units', 0), "legs": l_sum, "d1": d1, "d4": d4})
-                
                 if valid_res:
                     valid_res.sort(key=lambda x: x['total'])
                     return {"status": "success", "offer": valid_res[0]}
                 return {"status": "success", "offer": None}
-            
-            elif res.status_code == 429:
-                time.sleep(3) # 遇到限制稍微休息一下
-            elif res.status_code == 403:
-                return {"status": "quota_exceeded"}
+            elif res.status_code == 429: time.sleep(3)
+            elif res.status_code == 403: return {"status": "quota_exceeded"}
         except: pass
     return {"status": "error"}
 
@@ -142,14 +138,7 @@ def fetch_booking_bundle(legs, cabin, title="", d1="", d4=""):
 # 2. UI 面板
 # ==========================================
 st.markdown('<p class="custom-title">✈️ Flight Actuary | ULTRA MODE</p>', unsafe_allow_html=True)
-
-# 儀表板
-st.markdown(f"""
-<div class="quota-box">
-    🔥 <b>Ultra 模式已啟動：</b> 剩餘 Premium 額度：<span style="color:#ff4b4b; font-weight:bold;">{st.session_state.quota_remaining}</span> | 
-    已解除併發限制，進入地毯式掃描狀態。
-</div>
-""", unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">🔥 <b>Ultra 模式：</b> 剩餘 Premium 額度：<span style="color:#ff4b4b;">{st.session_state.quota_remaining}</span></div>', unsafe_allow_html=True)
 
 with st.container():
     st.subheader("📌 核心行程 (D2 / D3)")
@@ -182,37 +171,36 @@ with st.container():
 
     c_r1, c_r4 = st.columns(2)
     with c_r1:
-        st.multiselect("D1 區域過濾", list(CI_GLOBAL_HUBS.keys()), key="input_d1_reg")
+        # 💡 加入 on_change 回呼，實現自動連動
+        st.multiselect("D1 區域過濾", list(CI_GLOBAL_HUBS.keys()), key="input_d1_reg", on_change=on_region_change_d1)
         d1_options = [f"{c} ({n})" for r in st.session_state.input_d1_reg for c, n in CI_GLOBAL_HUBS[r].items()] if st.session_state.input_d1_reg else ALL_FORMATTED_CITIES
         st.multiselect("📍 D1 起點庫", d1_options, key="input_d1_hubs")
-        st.date_input("📅 D1 日期區間", value=(date(2026, 6, 10),), key="input_d1_dates")
+        st.date_input("📅 D1 日期", value=(date(2026, 6, 10),), key="input_d1_dates")
+
     with c_r4:
         if st.session_state.input_sync_hubs:
             st.info("💡 已與 D1 同步")
             d4_final_hubs = st.session_state.input_d1_hubs
         else:
-            st.multiselect("D4 區域過濾", list(CI_GLOBAL_HUBS.keys()), key="input_d4_reg")
+            st.multiselect("D4 區域過濾", list(CI_GLOBAL_HUBS.keys()), key="input_d4_reg", on_change=on_region_change_d4)
             d4_options = [f"{c} ({n})" for r in st.session_state.input_d4_reg for c, n in CI_GLOBAL_HUBS[r].items()] if st.session_state.input_d4_reg else ALL_FORMATTED_CITIES
             st.multiselect("📍 D4 終點庫", d4_options, key="input_d4_hubs")
             d4_final_hubs = st.session_state.input_d4_hubs
-        st.date_input("📅 D4 日期區間", value=(date(2026, 6, 26),), key="input_d4_dates")
+        st.date_input("📅 D4 日期", value=(date(2026, 6, 26),), key="input_d4_dates")
 
     st.markdown("---")
-    col_a, col_b = st.columns(2)
-    with col_a: st.selectbox("艙等", ["商務艙", "豪經艙", "經濟艙"], key="input_cabin")
-    with col_b: st.number_input("基準預算 (TWD)", value=200000, step=5000, key="input_ref_total")
-    st.checkbox("📧 完成後寄送 Email 報告", value=True, key="input_email_on")
+    st.selectbox("艙等", ["商務艙", "豪經艙", "經濟艙"], key="input_cabin")
+    st.number_input("基準預算 (TWD)", value=200000, key="input_ref_total")
 
-# --- 啟動獵殺 ---
+# --- 執行迴圈 (狂暴模式) ---
 if not st.session_state.engine_running:
     if st.button("🔥 啟動火力全開獵殺", use_container_width=True):
         d1_s, d1_e = parse_date_range(st.session_state.input_d1_dates)
         d4_s, d4_e = parse_date_range(st.session_state.input_d4_dates)
         d1_ts = [d1_s + timedelta(days=i) for i in range((d1_e - d1_s).days + 1)]
         d4_ts = [d4_s + timedelta(days=i) for i in range((d4_e - d4_s).days + 1)]
-        
         tasks = []
-        for h1_r, h4_r in product(st.session_state.input_d1_hubs, d4_final_hubs):
+        for h1_r, h4_r in product(st.session_state.input_d1_hubs, d4_final_hubs if not st.session_state.input_sync_hubs else st.session_state.input_d1_hubs):
             h1, h4 = h1_r.split(" ")[0], h4_r.split(" ")[0]
             for d1, d4 in product(d1_ts, d4_ts):
                 if d1 <= st.session_state.input_d2_dt and d4 >= st.session_state.input_d3_dt:
@@ -221,44 +209,35 @@ if not st.session_state.engine_running:
                          {"fromId": f"{d3_o}.AIRPORT", "toId": f"{d3_d}.AIRPORT", "date": st.session_state.input_d3_dt.strftime("%Y-%m-%d")}, 
                          {"fromId": f"{d3_d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                     tasks.append((l, st.session_state.input_cabin, f"{h1_r} ➔ {h4_r}", d1, d4))
-        
         if tasks:
             st.session_state.task_list, st.session_state.task_idx = tasks, 0
             st.session_state.valid_offers, st.session_state.engine_running = [], True
             st.rerun()
 
-# --- ULTRA 執行核心 ---
 if st.session_state.engine_running:
     total, curr = len(st.session_state.task_list), st.session_state.task_idx
-    BATCH = 20 # 🚀 火力全開！
-    st.progress(min(curr/total, 1.0) if total > 0 else 0.0, text=f"🚀 ULTRA 獵殺進度: {curr}/{total}")
-    
+    BATCH = 20
+    st.progress(min(curr/total, 1.0) if total > 0 else 0.0, text=f"🚀 獵殺進度: {curr}/{total}")
     batch = st.session_state.task_list[curr : curr + BATCH]
-    # ⚡️ 多執行緒全開 (max_workers=10)
     with ThreadPoolExecutor(max_workers=10) as exe:
         futures = {exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3], t[4]): t for t in batch}
         for f in as_completed(futures):
             res = f.result()
-            if res["status"] == "quota_exceeded": 
-                st.error("🚨 Ultra 額度竟也用盡了！"); st.session_state.engine_running = False; st.stop()
+            if res["status"] == "quota_exceeded": st.session_state.engine_running = False; st.stop()
             if res["status"] == "success" and res.get("offer"):
                 o = res["offer"]
                 o["ref"] = st.session_state.input_ref_total
                 st.session_state.valid_offers.append(o)
-
     if curr + BATCH >= total:
-        if st.session_state.input_email_on: send_email_report(st.session_state.valid_offers)
         st.session_state.engine_running = False; st.rerun()
     else:
         st.session_state.task_idx += BATCH
-        time.sleep(0.5); st.rerun() # ⚡️ 最小化冷卻時間
+        time.sleep(0.5); st.rerun()
 
-# 戰果展示
+# 展示結果
 if not st.session_state.engine_running and st.session_state.valid_offers:
     st.markdown("---")
     res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
-    st.success(f"🎉 獵殺完畢！捕獲 {len(res)} 組特價票。")
     for r in res[:100]:
-        diff = r['ref']-r['total']
-        with st.expander(f"💰 {r['total']:,} | 🔥 省 {diff:,} | {r['title']} ({r['d1']})"):
+        with st.expander(f"💰 {r['total']:,} | 省 {r['ref']-r['total']:,} | {r['title']} ({r['d1']})"):
             for leg in r['legs']: st.write(leg)
