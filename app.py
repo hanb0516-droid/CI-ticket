@@ -171,4 +171,53 @@ if not st.session_state.engine_running:
     if st.button("🚀 啟動自動對標獵殺", use_container_width=True):
         d1_in, d4_in = st.session_state.input_d1_dates, st.session_state.input_d4_dates
         d1_s, d1_e = (d1_in[0], d1_in[-1]) if isinstance(d1_in, (list, tuple)) else (d1_in, d1_in)
-        d4_s, d4_e = (d4_in
+        d4_s, d4_e = (d4_in[0], d4_in[-1]) if isinstance(d4_in, (list, tuple)) else (d4_in, d4_in)
+        
+        # 1. 抓取直飛基準價
+        final_ref = st.session_state.input_manual_ref
+        if st.session_state.input_auto_ref:
+            with st.spinner("🎯 正在校準直飛市場價..."):
+                direct_legs = [{"fromId": f"{d2_o}.AIRPORT", "toId": f"{d2_d}.AIRPORT", "date": st.session_state.input_d2_dt.strftime("%Y-%m-%d")},
+                               {"fromId": f"{d3_o}.AIRPORT", "toId": f"{d3_d}.AIRPORT", "date": st.session_state.input_d3_dt.strftime("%Y-%m-%d")}]
+                res = fetch_booking_bundle(direct_legs, cab_map[st.session_state.input_cabin])
+                if res: final_ref = res['total']; st.session_state.ref_price = final_ref
+                else: st.warning("無法抓取直飛價，改用手動預算。")
+
+        # 2. 生成任務
+        d1_ts, d4_ts = [d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days+1)], [d4_s + timedelta(days=i) for i in range((d4_e-d4_s).days+1)]
+        tasks = []
+        for h1_r, h4_r in product(st.session_state.input_d1_hubs, d4_hubs):
+            h1, h4 = h1_r.split(" ")[0], h4_r.split(" ")[0]
+            for d1, d4 in product(d1_ts, d4_ts):
+                if d1 <= st.session_state.input_d2_dt and d4 >= st.session_state.input_d3_dt:
+                    l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2_o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")}, 
+                         {"fromId": f"{d2_o}.AIRPORT", "toId": f"{d2_d}.AIRPORT", "date": st.session_state.input_d2_dt.strftime("%Y-%m-%d")}, 
+                         {"fromId": f"{d3_o}.AIRPORT", "toId": f"{d3_d}.AIRPORT", "date": st.session_state.input_d3_dt.strftime("%Y-%m-%d")}, 
+                         {"fromId": f"{d3_d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
+                    tasks.append((l, cab_map[st.session_state.input_cabin], h1_r, h4_r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d"), final_ref))
+        if tasks:
+            st.session_state.task_list, st.session_state.task_idx, st.session_state.valid_offers, st.session_state.engine_running = tasks, 0, [], True
+            st.rerun()
+
+if st.session_state.engine_running:
+    total, curr, BATCH = len(st.session_state.task_list), st.session_state.task_idx, 120
+    st.progress(min(curr/total, 1.0), text=f"🏎️ 曲速獵殺中: {curr}/{total}")
+    batch = st.session_state.task_list[curr : curr + BATCH]
+    with ThreadPoolExecutor(max_workers=40) as exe:
+        futures = {exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3], t[4], t[5]): t for t in batch}
+        for f in as_completed(futures):
+            res = f.result()
+            if res and (t_ref := batch[0][6]) - res['total'] > 0:
+                res['ref'] = t_ref
+                st.session_state.valid_offers.append(res)
+    if curr + BATCH >= total:
+        send_email_report(st.session_state.valid_offers, d2_o, d2_d, d3_o, d3_d, st.session_state.input_d2_dt, st.session_state.input_d3_dt, st.session_state.ref_price)
+        st.session_state.engine_running = False; st.rerun()
+    else: st.session_state.task_idx += BATCH; st.rerun()
+
+if not st.session_state.engine_running and st.session_state.valid_offers:
+    res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
+    st.success(f"🎉 獵殺完畢！共捕獲 {len(res)} 組獲利票。")
+    for r in res[:100]:
+        with st.expander(f"💰 {r['total']:,} | 🔥 省 {r['ref']-r['total']:,} | {r['h1']}({r['d1']}) ➔ {r['h4']}({r['d4']})"):
+            st.write(f"航班：{' | '.join(r['legs'])}")
