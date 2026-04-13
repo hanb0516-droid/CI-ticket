@@ -49,16 +49,15 @@ try:
     PWD = st.secrets.get("EMAIL_PASSWORD")
     RECEIVER = st.secrets.get("EMAIL_RECEIVER")
 except KeyError:
-    st.error("🚨 找不到 API 金鑰！"); st.stop()
+    st.error("🚨 找不到 API 金鑰！請於 Secrets 中設定。"); st.stop()
 
-# --- 初始化 Session State (核心狀態控管) ---
+# --- 初始化 Session State ---
 if "engine_running" not in st.session_state: st.session_state.engine_running = False
 if "task_list" not in st.session_state: st.session_state.task_list = []
 if "task_idx" not in st.session_state: st.session_state.task_idx = 0
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
-if "quota_dead" not in st.session_state: st.session_state.quota_dead = False
 
-# 🌍 華航站點庫
+# 🌍 華航站點字典
 CI_GLOBAL_HUBS = {
     "台灣": {"TPE": "台北桃園", "KHH": "高雄小港"},
     "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光", "ROR": "帛琉"},
@@ -82,19 +81,15 @@ def parse_date_range(date_val):
     return date_val, date_val
 
 # ==========================================
-# 📧 郵件發送功能
+# 📧 郵件功能
 # ==========================================
 def send_email_report(res_list):
-    if not SENDER or not PWD or not RECEIVER: return
-    lines = []
+    if not SENDER or not PWD or not RECEIVER: return False
     res_list.sort(key=lambda x: x['total'])
-    for r in res_list:
-        diff = r.get("ref", 200000) - r['total']
-        lines.append(f"💰 {r['total']:,} TWD | 🔥 狂省 {diff:,} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})")
-    txt_content = "\n".join(lines)
+    txt_content = "\n".join([f"💰 {r['total']:,} TWD | 🔥 省 {r.get('ref', 200000)-r['total']:,} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})" for r in res_list])
     msg = MIMEMultipart()
-    msg['From'], msg['To'], msg['Subject'] = SENDER, RECEIVER, f"✈️ 華航獵殺完畢 - 找到 {len(res_list)} 組"
-    msg.attach(MIMEText(f"任務完成，明細見附件。", 'plain'))
+    msg['From'], msg['To'], msg['Subject'] = SENDER, RECEIVER, f"✈️ 獵殺報告 - 捕獲 {len(res_list)} 組"
+    msg.attach(MIMEText("詳細清單請見附件。", 'plain'))
     att = MIMEBase('application', 'octet-stream')
     att.set_payload(txt_content.encode('utf-8'))
     encoders.encode_base64(att)
@@ -107,7 +102,7 @@ def send_email_report(res_list):
     except: return False
 
 # ==========================================
-# 1. API 引擎
+# 1. API 引擎 (Booking.com Multi-Stops)
 # ==========================================
 def fetch_booking_bundle(legs, cabin, title="", d1="", d4=""):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
@@ -140,95 +135,118 @@ def fetch_booking_bundle(legs, cabin, title="", d1="", d4=""):
     return {"status": "error"}
 
 # ==========================================
-# 2. UI 面板 (記憶力增強型)
+# 2. UI 面板 (記憶狀態與邏輯優化)
 # ==========================================
 st.markdown('<p class="custom-title">✈️ Flight Actuary Console</p>', unsafe_allow_html=True)
 
-# 🚀 輸入區：使用 key 鎖定狀態
+# 🚀 參數設定區
 with st.container():
     st.subheader("📌 核心行程 (D2 / D3)")
-    # 使用 key 確保重整後不會跳回預設值
-    st.radio("模式", ["來回", "多點"], horizontal=True, key="input_trip_type")
+    st.radio("行程類型", ["來回 (Round-trip)", "多點 (Multi-city)"], horizontal=True, key="input_trip_type")
     
     c_d2, c_d3 = st.columns(2)
-    if st.session_state.input_trip_type == "來回":
+    if "來回" in st.session_state.input_trip_type:
         with c_d2: 
-            st.selectbox("🛫 起/終點", ALL_FORMATTED_CITIES, index=get_city_index("TPE"), key="input_base_org")
-            st.date_input("D2 日期", value=date(2026, 6, 11), key="input_d2_dt")
+            st.selectbox("🛫 起/終點 (TPE)", ALL_FORMATTED_CITIES, index=get_city_index("TPE"), key="input_base_org")
+            st.date_input("D2 去程日期", value=date(2026, 6, 11), key="input_d2_dt")
         with c_d3:
-            st.selectbox("🛬 中轉點", ALL_FORMATTED_CITIES, index=get_city_index("PRG"), key="input_base_dst")
-            st.date_input("D3 日期", value=date(2026, 6, 25), key="input_d3_dt")
+            st.selectbox("🛬 中轉點 (如 PRG)", ALL_FORMATTED_CITIES, index=get_city_index("PRG"), key="input_base_dst")
+            st.date_input("D3 回程日期", value=date(2026, 6, 25), key="input_d3_dt")
         d2_o = d3_d = st.session_state.input_base_org.split(" ")[0]
         d2_d = d3_o = st.session_state.input_base_dst.split(" ")[0]
     else:
         with c_d2:
-            st.selectbox("D2出發", ALL_FORMATTED_CITIES, index=get_city_index("TPE"), key="input_d2_o")
-            st.selectbox("D2抵達", ALL_FORMATTED_CITIES, index=get_city_index("PRG"), key="input_d2_d")
-            st.date_input("D2日期", value=date(2026, 6, 11), key="input_d2_dt")
+            st.selectbox("D2 出發", ALL_FORMATTED_CITIES, index=get_city_index("TPE"), key="input_d2_o")
+            st.selectbox("D2 抵達", ALL_FORMATTED_CITIES, index=get_city_index("PRG"), key="input_d2_d")
+            st.date_input("D2 日期", value=date(2026, 6, 11), key="input_d2_dt")
         with c_d3:
-            st.selectbox("D3出發", ALL_FORMATTED_CITIES, index=get_city_index("FRA"), key="input_d3_o")
-            st.selectbox("D3抵達", ALL_FORMATTED_CITIES, index=get_city_index("TPE"), key="input_d3_d")
-            st.date_input("D3日期", value=date(2026, 6, 25), key="input_d3_dt")
-        d2_o = st.session_state.input_d2_o.split(" ")[0]
-        d2_d = st.session_state.input_d2_d.split(" ")[0]
-        d3_o = st.session_state.input_d3_o.split(" ")[0]
-        d3_d = st.session_state.input_d3_d.split(" ")[0]
+            st.selectbox("D3 出發", ALL_FORMATTED_CITIES, index=get_city_index("FRA"), key="input_d3_o")
+            st.selectbox("D3 抵達", ALL_FORMATTED_CITIES, index=get_city_index("TPE"), key="input_d3_d")
+            st.date_input("D3 日期", value=date(2026, 6, 25), key="input_d3_dt")
+        d2_o, d2_d, d3_o, d3_d = st.session_state.input_d2_o.split(" ")[0], st.session_state.input_d2_d.split(" ")[0], st.session_state.input_d3_o.split(" ")[0], st.session_state.input_d3_d.split(" ")[0]
 
-    with st.expander("🌍 外站雷達設定 (D1/D4)"):
-        c_r1, c_r4 = st.columns(2)
-        with c_r1:
-            st.multiselect("D1 區域", list(CI_GLOBAL_HUBS.keys()), default=["港澳大陸"], key="input_d1_reg")
-            d1_list = [f"{c} ({n})" for r in st.session_state.input_d1_reg for c, n in CI_GLOBAL_HUBS[r].items()]
-            st.multiselect("📍 D1 起點", d1_list, default=d1_list[:2] if d1_list else [], key="input_d1_hubs")
-            st.date_input("📅 D1 日期", value=(date(2026, 6, 10),), key="input_d1_dates")
-        with c_r4:
-            st.multiselect("D4 區域", list(CI_GLOBAL_HUBS.keys()), default=["港澳大陸"], key="input_d4_reg")
-            d4_list = [f"{c} ({n})" for r in st.session_state.input_d4_reg for c, n in CI_GLOBAL_HUBS[r].items()]
-            st.multiselect("📍 D4 終點", d4_list, default=d4_list[:2] if d4_list else [], key="input_d4_hubs")
-            st.date_input("📅 D4 日期", value=(date(2026, 6, 26),), key="input_d4_dates")
+    st.markdown("---")
+    st.subheader("🌍 外站雷達 (D1 / D4)")
+    sync_hubs = st.checkbox("👯 D1/D4 為同一個外站點", value=True, key="input_sync_hubs")
 
-    st.selectbox("艙等", ["商務艙", "豪經艙", "經濟艙"], key="input_cabin")
-    st.number_input("基準總預算", value=200000, key="input_ref_total")
-    st.checkbox("📧 完成後寄送 Email", value=True, key="input_email_on")
+    c_r1, c_r4 = st.columns(2)
+    # D1 設定
+    with c_r1:
+        st.multiselect("D1 區域過濾 (不選則顯示全部)", list(CI_GLOBAL_HUBS.keys()), key="input_d1_reg")
+        d1_options = [f"{c} ({n})" for r in st.session_state.input_d1_reg for c, n in CI_GLOBAL_HUBS[r].items()] if st.session_state.input_d1_reg else ALL_FORMATTED_CITIES
+        st.multiselect("📍 D1 起點庫", d1_options, default=d1_options[:2] if d1_options else [], key="input_d1_hubs")
+        st.date_input("📅 D1 日期區間", value=(date(2026, 6, 10),), key="input_d1_dates")
 
-# --- 啟動與接力執行 ---
+    # D4 設定
+    with c_r4:
+        if st.session_state.input_sync_hubs:
+            st.info("💡 已與 D1 同步，無需重複選擇。")
+            d4_final_hubs = st.session_state.input_d1_hubs
+        else:
+            st.multiselect("D4 區域過濾 (不選則顯示全部)", list(CI_GLOBAL_HUBS.keys()), key="input_d4_reg")
+            d4_options = [f"{c} ({n})" for r in st.session_state.input_d4_reg for c, n in CI_GLOBAL_HUBS[r].items()] if st.session_state.input_d4_reg else ALL_FORMATTED_CITIES
+            st.multiselect("📍 D4 終點庫", d4_options, default=d4_options[:2] if d4_options else [], key="input_d4_hubs")
+            d4_final_hubs = st.session_state.input_d4_hubs
+        st.date_input("📅 D4 日期區間", value=(date(2026, 6, 26),), key="input_d4_dates")
+
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1: st.selectbox("艙等 (D2/D3 基準)", ["商務艙", "豪經艙", "經濟艙"], key="input_cabin")
+    with col2: st.number_input("基準預算 (TPE直飛價 + 亞洲段)", value=200000, step=5000, key="input_ref_total")
+    st.checkbox("📧 完成後將結果 TXT 寄送到信箱", value=True, key="input_email_on")
+
+# --- 執行按鈕 ---
 if not st.session_state.engine_running:
-    if st.button("🚀 啟動地毯式掃描", use_container_width=True):
+    if st.button("🚀 啟動獵殺掃描", use_container_width=True):
         d1_s, d1_e = parse_date_range(st.session_state.input_d1_dates)
         d4_s, d4_e = parse_date_range(st.session_state.input_d4_dates)
         d1_dates = [d1_s + timedelta(days=i) for i in range((d1_e - d1_s).days + 1)]
         d4_dates = [d4_s + timedelta(days=i) for i in range((d4_e - d4_s).days + 1)]
         
+        # 🛡️ 邏輯排雷：預先檢查日期
         tasks = []
-        for h1_raw, h4_raw in product(st.session_state.input_d1_hubs, st.session_state.input_d4_hubs):
+        error_logs = []
+        for h1_raw, h4_raw in product(st.session_state.input_d1_hubs, d4_final_hubs):
             h1, h4 = h1_raw.split(" ")[0], h4_raw.split(" ")[0]
             for d1, d4 in product(d1_dates, d4_dates):
-                if d1 <= st.session_state.input_d2_dt and d4 >= st.session_state.input_d3_dt:
-                    l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2_o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")}, 
-                         {"fromId": f"{d2_o}.AIRPORT", "toId": f"{d2_d}.AIRPORT", "date": st.session_state.input_d2_dt.strftime("%Y-%m-%d")}, 
-                         {"fromId": f"{d3_o}.AIRPORT", "toId": f"{d3_d}.AIRPORT", "date": st.session_state.input_d3_dt.strftime("%Y-%m-%d")}, 
-                         {"fromId": f"{d3_d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
-                    tasks.append((l, st.session_state.input_cabin, f"{h1_raw} ➔ {h4_raw}", d1, d4))
+                if d1 > st.session_state.input_d2_dt: 
+                    error_logs.append(f"❌ 衝突: D1({d1}) 不可比 D2({st.session_state.input_d2_dt}) 晚")
+                    continue
+                if d4 < st.session_state.input_d3_dt:
+                    error_logs.append(f"❌ 衝突: D4({d4}) 不可比 D3({st.session_state.input_d3_dt}) 早")
+                    continue
+                
+                l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2_o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")}, 
+                     {"fromId": f"{d2_o}.AIRPORT", "toId": f"{d2_d}.AIRPORT", "date": st.session_state.input_d2_dt.strftime("%Y-%m-%d")}, 
+                     {"fromId": f"{d3_o}.AIRPORT", "toId": f"{d3_d}.AIRPORT", "date": st.session_state.input_d3_dt.strftime("%Y-%m-%d")}, 
+                     {"fromId": f"{d3_d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
+                tasks.append((l, st.session_state.input_cabin, f"{h1_raw} ➔ {h4_raw}", d1, d4))
         
-        if tasks:
+        if not tasks:
+            st.error("⚠️ 無法生成任務！請檢查日期邏輯是否正確。")
+            if error_logs: st.warning("\n".join(list(set(error_logs))[:3]))
+        else:
             st.session_state.task_list, st.session_state.task_idx = tasks, 0
             st.session_state.valid_offers, st.session_state.engine_running = [], True
             if os.path.exists(BLACKBOX_FILE): os.remove(BLACKBOX_FILE)
             st.rerun()
 
-# 接力執行中 UI
+# --- 接力執行 (Rerun Loop) ---
 if st.session_state.engine_running:
     total, curr = len(st.session_state.task_list), st.session_state.task_idx
     BATCH = 15
     batch_tasks = st.session_state.task_list[curr : curr + BATCH]
     
-    st.progress(curr/total, text=f"🔥 獵殺進度: {curr}/{total} | 已收穫: {len(st.session_state.valid_offers)}")
+    st.progress(curr/total, text=f"🔥 任務執行中: {curr}/{total} | 已收穫: {len(st.session_state.valid_offers)}")
     
     with ThreadPoolExecutor(max_workers=5) as exe:
-        futures = {exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3]): t for t in batch_tasks}
+        futures = {exe.submit(fetch_booking_bundle, t[0], t[1], f"{t[2]}", t[3], t[4]): t for t in batch_tasks}
         for f in as_completed(futures):
             res = f.result()
-            if res["status"] == "quota_exceeded": st.session_state.quota_dead = True; break
+            if res["status"] == "quota_exceeded": 
+                st.error("🚨 API 額度用盡！將寄出目前已找到的結果。")
+                st.session_state.task_idx = total # 強制結束
+                break
             if res["status"] == "success" and res.get("offer"):
                 o = res["offer"]
                 o["ref"] = st.session_state.input_ref_total
@@ -236,24 +254,23 @@ if st.session_state.engine_running:
                 with open(BLACKBOX_FILE, "a", encoding="utf-8") as file:
                     file.write(json.dumps(o, ensure_ascii=False) + "\n")
 
-    if st.session_state.quota_dead or (curr + BATCH >= total):
+    if curr + BATCH >= total:
         if st.session_state.input_email_on and st.session_state.valid_offers:
             send_email_report(st.session_state.valid_offers)
+            st.toast("📨 搜尋完畢，報告已寄至信箱！")
         st.session_state.engine_running = False
         st.rerun()
     else:
         st.session_state.task_idx += BATCH
         time.sleep(1); st.rerun()
 
-# ==========================================
-# 4. 戰果展示
-# ==========================================
+# --- 4. 戰果展示 ---
 if not st.session_state.engine_running and st.session_state.valid_offers:
     st.markdown("---")
+    st.success(f"🎉 獵殺完畢！共捕獲 {len(st.session_state.valid_offers)} 組神票。")
     res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
     
-    # 下載按鈕
-    df_export = pd.DataFrame([{ "總價": r['total'], "省": r['ref']-r['total'], "航線": r['title'], "D1": r['d1'] } for r in res])
+    df_export = pd.DataFrame([{ "總價": r['total'], "價差": r['ref']-r['total'], "航線": r['title'], "D1": r['d1'] } for r in res])
     st.download_button("📥 下載完整 CSV 戰果", df_export.to_csv(index=False).encode('utf-8-sig'), "Flight_Results.csv", "text/csv")
 
     for r in res[:50]:
