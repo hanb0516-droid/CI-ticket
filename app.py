@@ -2,9 +2,8 @@ import streamlit as st
 import requests
 import json
 import time
-import random
-import gc
 import os
+import pandas as pd
 from datetime import datetime, timedelta, date
 from itertools import product
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -51,7 +50,7 @@ try:
     raw_key = st.secrets["BOOKING_API_KEY"]
     BOOKING_API_KEY = raw_key.encode('ascii', 'ignore').decode('ascii').strip()
 except KeyError:
-    st.error("🚨 找不到 API 金鑰。"); st.stop()
+    st.error("🚨 找不到 API 金鑰，請於 Streamlit Secrets 中設定 BOOKING_API_KEY。"); st.stop()
 
 # --- 初始化 Session State ---
 if "engine_running" not in st.session_state: st.session_state.engine_running = False
@@ -74,18 +73,15 @@ ALL_FORMATTED_CITIES = [f"{code} ({name})" for region, cities in CI_ASIAN_HUBS.i
 # 0.5 📦 黑盒子資料讀取區 (單行隔離防護版)
 # ==========================================
 st.markdown('<p class="custom-title">✈️ Flight Actuary Console</p>', unsafe_allow_html=True)
-st.markdown('<p style="color:#cbd5e1; font-weight:600; margin-bottom:25px;">永不掉線接力版 (最終潔癖全防護模式)</p>', unsafe_allow_html=True)
+st.markdown('<p style="color:#cbd5e1; font-weight:600; margin-bottom:25px;">永不掉線接力版 (包含 CSV 匯出功能)</p>', unsafe_allow_html=True)
 
 if not st.session_state.engine_running and os.path.exists(BLACKBOX_FILE):
     rescued_data = []
     with open(BLACKBOX_FILE, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
-                # 🛡️ 單行隔離防護：即使某行 JSON 因伺服器斷電毀損，也不會波及其他資料
-                try:
-                    rescued_data.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass 
+                try: rescued_data.append(json.loads(line))
+                except json.JSONDecodeError: pass 
     
     if rescued_data:
         st.markdown(f"<div class='rescue-box'><h4>📁 黑盒子搶救紀錄</h4><p>成功找回上次掃描攔截到的 <b>{len(rescued_data)}</b> 組特價航班：</p></div>", unsafe_allow_html=True)
@@ -96,7 +92,7 @@ if not st.session_state.engine_running and os.path.exists(BLACKBOX_FILE):
             badge_html = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省下 {diff:,}</span>" if diff > 0 else f"<span style='color:#ff5252;'>⚠️ 虧損 {abs(diff):,}</span>"
             
             with st.expander(f"💾 💰 {r['total']:,} TWD | {badge_plain} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})"):
-                st.markdown(f"**💰 價差精算：** 傳統分開買約 `{r.get('ref', 0):,}` ➔ 隱藏聯程價 `{r['total']:,}` ( {badge_html} )", unsafe_allow_html=True)
+                st.markdown(f"**💰 價差精算：** 基準底價 `{r.get('ref', 0):,}` ➔ 隱藏聯程價 `{r['total']:,}` ( {badge_html} )", unsafe_allow_html=True)
                 st.markdown("---")
                 for j, leg in enumerate(r['legs'], 1): st.write(f"**航段 {j}** | {leg}")
         if st.button("🗑️ 清除黑盒子紀錄 (準備執行全新掃描)"):
@@ -188,10 +184,10 @@ else:
         d3_dst = st.text_input("D3 抵達", value="TPE").upper()
         d3_date = st.date_input("D3 回程日期", value=date(2026, 6, 25))
 
-    st.markdown("#### 🎯 基準價分析設定")
+    st.markdown("#### 🎯 基準預算設定 (用來計算省下多少錢)")
     c_ref1, c_ref2 = st.columns(2)
-    with c_ref1: fallback_d2d3 = st.number_input("保底 D2/D3 直飛價", value=175000, step=1000)
-    with c_ref2: fallback_d1d4 = st.number_input("保底 D1/D4 亞洲價", value=25000, step=1000)
+    with c_ref1: fallback_d2d3 = st.number_input("保底 D2/D3 直飛預算", value=175000, step=1000)
+    with c_ref2: fallback_d1d4 = st.number_input("保底 D1/D4 亞洲預算", value=25000, step=1000)
 
     st.subheader("🌍 外站雷達 (D1 / D4)")
     c_d1, c_d4 = st.columns(2)
@@ -278,7 +274,7 @@ if st.session_state.engine_running:
         st.rerun() 
 
 # ==========================================
-# 4. 戰果展示區
+# 4. 戰果展示區與 CSV 下載
 # ==========================================
 if not st.session_state.engine_running and st.session_state.task_list:
     st.markdown("---")
@@ -286,12 +282,35 @@ if not st.session_state.engine_running and st.session_state.task_list:
     if res:
         res.sort(key=lambda x: x['total'])
         st.success(f"🎉 獵殺完畢！以下為過濾後的精選機票：")
+        
+        # --- 產生 CSV 下載按鈕 ---
+        df_export = pd.DataFrame([{
+            "航線": r['title'],
+            "聯程總價 (TWD)": r['total'],
+            "省下金額 (TWD)": r['ref'] - r['total'],
+            "D1 外站出發日": r['d1'],
+            "D4 外站回程日": r['d4'],
+            "詳細航班 (四段)": " | ".join(r['legs'])
+        } for r in res])
+        
+        csv_data = df_export.to_csv(index=False, encoding='utf-8-sig')
+        st.download_button(
+            label="📥 一鍵匯出本次戰果 (Excel CSV格式)",
+            data=csv_data,
+            file_name=f"Flight_Hunter_Result_{date.today()}.csv",
+            mime="text/csv",
+            type="primary",
+            use_container_width=True
+        )
+        st.markdown("---")
+        # ------------------------
+
         for r in res[:100]:
             diff = r["ref"] - r['total']
             b_p = f"🔥 狂省 {diff:,}" if diff > 50000 else f"✨ 省下 {diff:,}" if diff > 0 else f"⚠️ 虧損 {abs(diff):,}"
             b_h = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省下 {diff:,}</span>" if diff > 0 else f"<span style='color:#ff5252;'>⚠️ 虧損 {abs(diff):,}</span>"
             with st.expander(f"💰 {r['total']:,} TWD | {b_p} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})"):
-                st.markdown(f"**💰 價差精算：** 傳統分段買約 `{r['ref']:,}` ➔ 隱藏聯程價 `{r['total']:,}` ( {b_h} )", unsafe_allow_html=True)
+                st.markdown(f"**💰 價差精算：** 基準底價 `{r['ref']:,}` ➔ 隱藏聯程價 `{r['total']:,}` ( {b_h} )", unsafe_allow_html=True)
                 st.markdown("---")
                 for j, leg in enumerate(r['legs'], 1): st.write(f"**航段 {j}** | {leg}")
     else: 
