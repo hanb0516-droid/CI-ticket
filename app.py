@@ -160,4 +160,168 @@ if st.session_state.engine_running:
         st.markdown("</div>", unsafe_allow_html=True)
 
     if st.button("🛑 提前終止掃描並進行結算", type="primary"):
-        st
+        st.session_state.engine_running = False
+        st.rerun()
+else:
+    c_toggles = st.columns(3)
+    with c_toggles[0]: strict_ci_toggle = st.checkbox("🔒 嚴格鎖定純華航 (CI)", value=True)
+    with c_toggles[1]: hide_loss_toggle = st.checkbox("🙈 隱藏虧損票 (賠錢不存)", value=True)
+    
+    st.subheader("📌 核心行程 (D2 / D3)")
+    trip_type = st.radio("行程模式", ["🔄 單純來回 (Round-trip)", "🔀 多點進出 (Multi-city)"], horizontal=True, label_visibility="collapsed")
+    
+    c_d2, c_d3 = st.columns(2)
+    if "來回" in trip_type:
+        with c_d2:
+            base_org = st.text_input("🛫 D2起點 / D3終點 (通常為 TPE)", value="TPE").upper()
+            d2_date = st.date_input("D2 去程日期", value=date(2026, 6, 11))
+        with c_d3:
+            base_dst = st.text_input("🛬 D2終點 / D3起點 (如 PRG, FRA)", value="PRG").upper()
+            d3_date = st.date_input("D3 回程日期", value=date(2026, 6, 25))
+        d2_org, d3_dst = base_org, base_org
+        d2_dst, d3_org = base_dst, base_dst
+    else:
+        with c_d2:
+            d2_org = st.text_input("D2 出發", value="TPE").upper()
+            d2_dst = st.text_input("D2 抵達", value="PRG").upper()
+            d2_date = st.date_input("D2 去程日期", value=date(2026, 6, 11))
+        with c_d3:
+            d3_org = st.text_input("D3 出發", value="FRA").upper()
+            d3_dst = st.text_input("D3 抵達", value="TPE").upper()
+            d3_date = st.date_input("D3 回程日期", value=date(2026, 6, 25))
+
+    st.markdown("#### 🎯 基準預算設定")
+    c_ref1, c_ref2 = st.columns(2)
+    with c_ref1: fallback_d2d3 = st.number_input("保底 D2/D3 直飛預算", value=175000, step=1000)
+    with c_ref2: fallback_d1d4 = st.number_input("保底 D1/D4 外站預算", value=25000, step=1000)
+
+    st.subheader("🌍 外站雷達 (D1 / D4) - 支援華航全球站點")
+    c_d1, c_d4 = st.columns(2)
+    with c_d1:
+        st.multiselect("🗂️ 區域 (D1)", ["全部"] + list(CI_GLOBAL_HUBS.keys()), default=["港澳大陸"], key="d1_reg", on_change=sync_d1)
+        d1_hubs_raw = st.multiselect("📍 D1 起點庫", ALL_FORMATTED_CITIES, key="d1_city")
+        d1_date_range = st.date_input("📅 D1 日期 (單日或區間)", value=(date(2026, 6, 10),)) # 預設 tuple 啟用區間功能
+    with c_d4:
+        st.multiselect("🗂️ 區域 (D4)", ["全部"] + list(CI_GLOBAL_HUBS.keys()), default=["港澳大陸"], key="d4_reg", on_change=sync_d4)
+        d4_hubs_raw = st.multiselect("📍 D4 終點庫", ALL_FORMATTED_CITIES, key="d4_city")
+        d4_date_range = st.date_input("📅 D4 日期 (單日或區間)", value=(date(2026, 6, 26),))
+
+    cabin_choice = st.selectbox("艙等", ["商務艙", "豪經艙", "經濟艙"])
+
+    if st.button("🚀 啟動【全球無死角】外站聯程獵殺", use_container_width=True):
+        d1_s, d1_e = parse_date_range(d1_date_range)
+        d4_s, d4_e = parse_date_range(d4_date_range)
+        if not d1_s or not d4_s: st.error("日期格式錯誤"); st.stop()
+        
+        d1_dates = [d1_s + timedelta(days=i) for i in range((d1_e - d1_s).days + 1)]
+        d4_dates = [d4_s + timedelta(days=i) for i in range((d4_e - d4_s).days + 1)]
+        d1_codes, d4_codes = [h.split(" ")[0] for h in d1_hubs_raw], [h.split(" ")[0] for h in d4_hubs_raw]
+        
+        tasks = []
+        for h1_raw, h4_raw in product(d1_hubs_raw, d4_hubs_raw):
+            h1_c, h4_c = h1_raw.split(" ")[0], h4_raw.split(" ")[0]
+            for d1, d4 in product(d1_dates, d4_dates):
+                if d1 <= d2_date and d4 >= d3_date: 
+                    legs = [{"fromId": f"{h1_c}.AIRPORT", "toId": f"{d2_org}.AIRPORT", "date": d1.strftime("%Y-%m-%d")}, {"fromId": f"{d2_org}.AIRPORT", "toId": f"{d2_dst}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")}, {"fromId": f"{d3_org}.AIRPORT", "toId": f"{d3_dst}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")}, {"fromId": f"{d3_dst}.AIRPORT", "toId": f"{h4_c}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
+                    tasks.append((legs, cabin_choice, strict_ci_toggle, f"{h1_raw} ➔ {h4_raw}", d1, d4, h1_c, h4_c))
+
+        if not tasks: st.warning("組合無效：請確認 D1 日期在 D2 之前，且 D4 日期在 D3 之後。"); st.stop()
+        
+        st.session_state.task_list = tasks
+        st.session_state.task_idx = 0
+        st.session_state.valid_offers = []
+        st.session_state.quota_dead = False
+        st.session_state.hide_loss = hide_loss_toggle
+        st.session_state.core_price = fallback_d2d3
+        st.session_state.base_cache = {f"{h1}_{h4}": fallback_d1d4 for h1, h4 in product(d1_codes, d4_codes)}
+        st.session_state.engine_running = True
+        
+        if os.path.exists(BLACKBOX_FILE): os.remove(BLACKBOX_FILE)
+        st.rerun()
+
+# ==========================================
+# 3. 接力執行核心 (State Machine Loop)
+# ==========================================
+if st.session_state.engine_running:
+    total = len(st.session_state.task_list)
+    curr = st.session_state.task_idx
+    BATCH = 15 
+    
+    batch_tasks = st.session_state.task_list[curr : curr + BATCH]
+    st.progress(min(curr / total, 1.0), text=f"核彈掃描進度: {curr}/{total} | 已收穫: {len(st.session_state.valid_offers)}")
+    
+    live = st.empty()
+    with ThreadPoolExecutor(max_workers=5) as exe:
+        futures = {exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3], t[4], t[5]): t for t in batch_tasks}
+        for f in as_completed(futures):
+            t_meta = futures[f]
+            try:
+                res = f.result()
+                if res["status"] == "quota_exceeded": 
+                    st.session_state.quota_dead = True; break
+                elif res["status"] == "success" and res.get("offer"):
+                    o = res["offer"]
+                    o["ref"] = st.session_state.core_price + st.session_state.base_cache[f"{t_meta[6]}_{t_meta[7]}"]
+                    diff = o["ref"] - o['total']
+                    if st.session_state.hide_loss and diff <= 0: continue 
+                    
+                    st.session_state.valid_offers.append(o)
+                    with open(BLACKBOX_FILE, "a", encoding="utf-8") as file:
+                        file.write(json.dumps(o, ensure_ascii=False) + "\n")
+                    if diff > 10000:
+                        with live.container():
+                            st.markdown(f"<div class='live-hit'>🔔 <b>捕獲神票：</b> {o['title']} | <span style='color:#00e676'>省 {diff:,}</span></div>", unsafe_allow_html=True)
+            except: pass
+
+    if st.session_state.quota_dead or (curr + BATCH >= total):
+        st.session_state.engine_running = False
+        st.rerun()
+    else:
+        st.session_state.task_idx += BATCH
+        time.sleep(0.5) 
+        st.rerun() 
+
+# ==========================================
+# 4. 戰果展示區與 CSV 下載
+# ==========================================
+if not st.session_state.engine_running and st.session_state.task_list:
+    st.markdown("---")
+    res = st.session_state.valid_offers
+    if res:
+        res.sort(key=lambda x: x['total'])
+        st.success(f"🎉 獵殺完畢！成功抓取 {len(res)} 組精選機票：")
+        
+        # --- 產生 CSV 下載按鈕 ---
+        df_export = pd.DataFrame([{
+            "航線": r['title'],
+            "聯程總價 (TWD)": r['total'],
+            "省下金額 (TWD)": r['ref'] - r['total'],
+            "D1 外站出發日": r['d1'],
+            "D4 外站回程日": r['d4'],
+            "詳細航班 (四段)": " | ".join(r['legs'])
+        } for r in res])
+        
+        csv_data = df_export.to_csv(index=False, encoding='utf-8-sig')
+        st.download_button(
+            label="📥 一鍵匯出本次戰果 (Excel CSV格式)",
+            data=csv_data,
+            file_name=f"Flight_Hunter_Result_{date.today()}.csv",
+            mime="text/csv",
+            type="primary",
+            use_container_width=True
+        )
+        st.markdown("---")
+
+        for r in res[:100]:
+            diff = r["ref"] - r['total']
+            b_p = f"🔥 狂省 {diff:,}" if diff > 50000 else f"✨ 省下 {diff:,}" if diff > 0 else f"⚠️ 虧損 {abs(diff):,}"
+            b_h = f"<span style='color:#00e676; font-weight:bold;'>🔥 狂省 {diff:,}</span>" if diff > 50000 else f"<span style='color:#b2ff59;'>✨ 省下 {diff:,}</span>" if diff > 0 else f"<span style='color:#ff5252;'>⚠️ 虧損 {abs(diff):,}</span>"
+            with st.expander(f"💰 {r['total']:,} TWD | {b_p} | {r['title']} (D1:{r['d1']} / D4:{r['d4']})"):
+                st.markdown(f"**💰 價差精算：** 基準底價 `{r['ref']:,}` ➔ 隱藏聯程價 `{r['total']:,}` ( {b_h} )", unsafe_allow_html=True)
+                st.markdown("---")
+                for j, leg in enumerate(r['legs'], 1): st.write(f"**航段 {j}** | {leg}")
+    else: 
+        if st.session_state.hide_loss:
+            st.warning("📉 本次掃描結果皆為虧損票，已啟動潔癖模式全部濾除。建議更換日期或區域再戰！")
+        else:
+            st.error("❌ 本次掃描未尋獲符合條件之特價聯程票。")
