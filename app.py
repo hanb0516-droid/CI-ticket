@@ -62,8 +62,9 @@ if "base_cache" not in st.session_state: st.session_state.base_cache = {}
 if "quota_dead" not in st.session_state: st.session_state.quota_dead = False
 if "hide_loss" not in st.session_state: st.session_state.hide_loss = True
 
-# 🌍 升級版：華航全球樞紐站點 (CI GLOBAL HUBS)
+# 🌍 升級版：華航全球樞紐站點 (加入台灣主場)
 CI_GLOBAL_HUBS = {
+    "台灣": {"TPE": "台北桃園", "KHH": "高雄小港"},
     "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光", "ROR": "帛琉"},
     "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "TAK": "高松", "HIJ": "廣島", "KOJ": "鹿兒島", "KMQ": "小松", "TOY": "富山", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
     "港澳大陸": {"HKG": "香港", "MFM": "澳門", "PEK": "北京", "PVG": "上海浦東", "SHA": "上海虹橋", "CAN": "廣州", "SZX": "深圳", "XMN": "廈門", "CTU": "成都", "CKG": "重慶"},
@@ -73,11 +74,17 @@ CI_GLOBAL_HUBS = {
 }
 ALL_FORMATTED_CITIES = [f"{code} ({name})" for region, cities in CI_GLOBAL_HUBS.items() for code, name in cities.items()]
 
+# 快速尋找預設選項的 Index
+def get_city_index(code):
+    for i, city in enumerate(ALL_FORMATTED_CITIES):
+        if city.startswith(code): return i
+    return 0
+
 # ==========================================
 # 0.5 📦 黑盒子資料讀取區
 # ==========================================
 st.markdown('<p class="custom-title">✈️ Flight Actuary Console</p>', unsafe_allow_html=True)
-st.markdown('<p style="color:#cbd5e1; font-weight:600; margin-bottom:25px;">全球地毯式搜索・智能區間切換版</p>', unsafe_allow_html=True)
+st.markdown('<p style="color:#cbd5e1; font-weight:600; margin-bottom:25px;">全球地毯式搜索・全區下拉選單版</p>', unsafe_allow_html=True)
 
 if not st.session_state.engine_running and os.path.exists(BLACKBOX_FILE):
     rescued_data = []
@@ -136,7 +143,6 @@ def fetch_booking_bundle(legs, cabin, strict_ci, title="", d1="", d4=""):
 # ==========================================
 # 2. UI 介面與動態連動
 # ==========================================
-# 智能解析日期區間 (解決點選一天還是兩天的問題)
 def parse_date_range(date_val):
     if isinstance(date_val, (tuple, list)):
         if len(date_val) == 2: return date_val[0], date_val[1]
@@ -173,34 +179,36 @@ else:
     c_d2, c_d3 = st.columns(2)
     if "來回" in trip_type:
         with c_d2:
-            base_org = st.text_input("🛫 D2起點 / D3終點 (通常為 TPE)", value="TPE").upper()
+            base_org_raw = st.selectbox("🛫 D2起點 / D3終點", ALL_FORMATTED_CITIES, index=get_city_index("TPE"))
             d2_date = st.date_input("D2 去程日期", value=date(2026, 6, 11))
         with c_d3:
-            base_dst = st.text_input("🛬 D2終點 / D3起點 (如 PRG, FRA)", value="PRG").upper()
+            base_dst_raw = st.selectbox("🛬 D2終點 / D3起點", ALL_FORMATTED_CITIES, index=get_city_index("PRG"))
             d3_date = st.date_input("D3 回程日期", value=date(2026, 6, 25))
-        d2_org, d3_dst = base_org, base_org
-        d2_dst, d3_org = base_dst, base_dst
+        d2_org, d3_dst = base_org_raw.split(" ")[0], base_org_raw.split(" ")[0]
+        d2_dst, d3_org = base_dst_raw.split(" ")[0], base_dst_raw.split(" ")[0]
     else:
         with c_d2:
-            d2_org = st.text_input("D2 出發", value="TPE").upper()
-            d2_dst = st.text_input("D2 抵達", value="PRG").upper()
+            d2_org_raw = st.selectbox("🛫 D2 出發", ALL_FORMATTED_CITIES, index=get_city_index("TPE"))
+            d2_dst_raw = st.selectbox("🛬 D2 抵達", ALL_FORMATTED_CITIES, index=get_city_index("PRG"))
             d2_date = st.date_input("D2 去程日期", value=date(2026, 6, 11))
         with c_d3:
-            d3_org = st.text_input("D3 出發", value="FRA").upper()
-            d3_dst = st.text_input("D3 抵達", value="TPE").upper()
+            d3_org_raw = st.selectbox("🛫 D3 出發", ALL_FORMATTED_CITIES, index=get_city_index("FRA"))
+            d3_dst_raw = st.selectbox("🛬 D3 抵達", ALL_FORMATTED_CITIES, index=get_city_index("TPE"))
             d3_date = st.date_input("D3 回程日期", value=date(2026, 6, 25))
+        d2_org, d2_dst = d2_org_raw.split(" ")[0], d2_dst_raw.split(" ")[0]
+        d3_org, d3_dst = d3_org_raw.split(" ")[0], d3_dst_raw.split(" ")[0]
 
     st.markdown("#### 🎯 基準預算設定")
     c_ref1, c_ref2 = st.columns(2)
     with c_ref1: fallback_d2d3 = st.number_input("保底 D2/D3 直飛預算", value=175000, step=1000)
     with c_ref2: fallback_d1d4 = st.number_input("保底 D1/D4 外站預算", value=25000, step=1000)
 
-    st.subheader("🌍 外站雷達 (D1 / D4) - 支援華航全球站點")
+    st.subheader("🌍 外站雷達 (D1 / D4)")
     c_d1, c_d4 = st.columns(2)
     with c_d1:
         st.multiselect("🗂️ 區域 (D1)", ["全部"] + list(CI_GLOBAL_HUBS.keys()), default=["港澳大陸"], key="d1_reg", on_change=sync_d1)
         d1_hubs_raw = st.multiselect("📍 D1 起點庫", ALL_FORMATTED_CITIES, key="d1_city")
-        d1_date_range = st.date_input("📅 D1 日期 (單日或區間)", value=(date(2026, 6, 10),)) # 預設 tuple 啟用區間功能
+        d1_date_range = st.date_input("📅 D1 日期 (單日或區間)", value=(date(2026, 6, 10),))
     with c_d4:
         st.multiselect("🗂️ 區域 (D4)", ["全部"] + list(CI_GLOBAL_HUBS.keys()), default=["港澳大陸"], key="d4_reg", on_change=sync_d4)
         d4_hubs_raw = st.multiselect("📍 D4 終點庫", ALL_FORMATTED_CITIES, key="d4_city")
