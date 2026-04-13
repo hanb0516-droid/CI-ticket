@@ -12,24 +12,24 @@ from itertools import product
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
-# 0. UI 初始化 (ULTRA 旗艦樣式)
+# 0. UI 初始化 (Hyper-Drive 旗艦樣式)
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | AUTO-BENCHMARK FINAL", page_icon="🏎️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | HYPER-DRIVE", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     [data-testid="stAppViewContainer"], .stApp {
-        background-image: linear-gradient(rgba(10, 15, 30, 0.4), rgba(10, 15, 30, 0.6)), 
+        background-image: linear-gradient(rgba(10, 15, 30, 0.5), rgba(10, 15, 30, 0.7)), 
         url("https://images.unsplash.com/photo-1436491865332-7a61a109cc05?q=80&w=2074&auto=format&fit=crop");
         background-size: cover !important; background-position: center !important; background-attachment: fixed !important;
     }
     .custom-title {
-        background: linear-gradient(45deg, #ff4b4b, #ff8c00); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        font-weight: 900; font-size: 3.5rem; text-shadow: 0px 5px 15px rgba(255, 75, 75, 0.4);
+        background: linear-gradient(45deg, #00e676, #00e5ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        font-weight: 900; font-size: 3.5rem; text-shadow: 0px 5px 20px rgba(0, 230, 118, 0.3);
     }
     .quota-box {
-        padding: 15px; background: rgba(255, 75, 75, 0.15); border-radius: 12px; border: 2px solid #ff4b4b; margin-bottom: 25px;
+        padding: 15px; background: rgba(0, 230, 118, 0.1); border-radius: 12px; border: 2px solid #00e676; margin-bottom: 25px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -42,6 +42,7 @@ try:
 except KeyError:
     st.error("🚨 Secrets 配置有誤！"); st.stop()
 
+# 狀態鎖定
 if "engine_running" not in st.session_state: st.session_state.engine_running = False
 if "task_list" not in st.session_state: st.session_state.task_list = []
 if "task_idx" not in st.session_state: st.session_state.task_idx = 0
@@ -69,23 +70,22 @@ def send_email_report(res_list, d2_o, d2_d, d3_o, d3_d, d2_dt, d3_dt, ref):
     if not res_list: return False
     res_list.sort(key=lambda x: x['total'])
     targets = [city for city in [d2_d, d3_o] if city not in ["TPE", "KHH"]]
-    target_str = "/".join(list(dict.fromkeys(targets))) if targets else "海外"
+    target_str = "/".join(list(dict.fromkeys(targets))) if targets else "海外目的地"
     
     html = f"""
-    <html><body>
-        <h2 style="color: #ff4b4b;">✈️ [目標 {target_str}] 獲利報告</h2>
-        <p>台北直飛基準價：<b>{ref:,} TWD</b></p>
-        <p>核心行程：{d2_o} ➔ {d2_d} | 去程：{d2_dt} | 回程：{d3_dt}</p>
+    <html><body style="font-family: Arial, sans-serif;">
+        <h2 style="color: #00e676;">⚡ HYPER-DRIVE 獵殺報告：{target_str}</h2>
+        <p>直飛基準價：<b>{ref:,} TWD</b> | 共捕獲 <b>{len(res_list)}</b> 組獲利票</p>
         <hr>
-        <table border="1" cellpadding="8" style="border-collapse: collapse; width: 100%;">
-            <tr style="background-color: #f2f2f2;"><th>總票價</th><th>🔥 實省</th><th>外站路徑</th></tr>
+        <table border="1" cellpadding="10" style="border-collapse: collapse; width: 100%;">
+            <tr style="background-color: #f8f8f8;"><th>票價 (TWD)</th><th style="color: red;">實省金額</th><th>行程 (D1 ➔ D4)</th></tr>
     """
     for r in res_list:
         diff = ref - r['total']
-        html += f"<tr><td><b>{r['total']:,}</b></td><td style='color:red;'>{diff:,}</td><td>{r['h1']}({r['d1']})➔{r['h4']}({r['d4']})</td></tr>"
+        html += f"<tr><td><b>{r['total']:,}</b></td><td style='color:red; font-weight:bold;'>{diff:,}</td><td>{r['h1']} ({r['d1']}) ➔ {r['h4']} ({r['d4']})</td></tr>"
     html += "</table></body></html>"
     msg = MIMEMultipart()
-    msg['From'], msg['To'], msg['Subject'] = SENDER, RECEIVER, f"✈️ [目標 {target_str}] 捕獲 {len(res_list)} 組獲利票 (直飛對標)"
+    msg['From'], msg['To'], msg['Subject'] = SENDER, RECEIVER, f"⚡ [HYPER] 目標 {target_str} | 捕獲 {len(res_list)} 組獲利票"
     msg.attach(MIMEText(html, 'html', 'utf-8'))
     try:
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
@@ -93,14 +93,11 @@ def send_email_report(res_list, d2_o, d2_d, d3_o, d3_d, d2_dt, d3_dt, ref):
         return True
     except: return False
 
-# ==========================================
-# 1. API 引擎 (增加基準價抓取功能)
-# ==========================================
 def fetch_booking_bundle(legs, cabin, h1="", h4="", d1="", d4=""):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": BOOKING_API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     try:
-        res = requests.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=20)
+        res = requests.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=15)
         rem = res.headers.get('x-ratelimit-requests-remaining')
         if rem: st.session_state.quota_remaining = rem
         if res.status_code == 200:
@@ -112,29 +109,29 @@ def fetch_booking_bundle(legs, cabin, h1="", h4="", d1="", d4=""):
                     car = seg.get('legs', [{}])[0].get('flightInfo', {}).get('carrierInfo', {}).get('operatingCarrier') or '??'
                     if car != "CI": is_ci = False; break
                     l_sum.append(f"{car}{seg.get('legs', [{}])[0].get('flightInfo', {}).get('flightNumber', '')}")
-                if is_ci and len(l_sum) == (4 if h1 else 2): # 外站是4段，直飛是2段
+                if is_ci and len(l_sum) == (4 if h1 else 2):
                     valid.append({"total": offer.get('priceBreakdown', {}).get('total', {}).get('units', 0), "legs": l_sum, "h1": h1, "h4": h4, "d1": d1, "d4": d4})
             if valid: return sorted(valid, key=lambda x: x['total'])[0]
     except: pass
     return None
 
 # ==========================================
-# 2. UI 佈局
+# 2. UI 面板
 # ==========================================
-st.markdown('<p class="custom-title">✈️ ULTRA AUTO-BENCHMARK</p>', unsafe_allow_html=True)
-st.markdown(f'<div class="quota-box">🏎️ <b>極限模式：</b> 剩餘額度：{st.session_state.quota_remaining} | 🎯 目前基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
+st.markdown('<p class="custom-title">⚡ ULTRA HYPER-DRIVE</p>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">🏎️ <b>星際躍遷模式：</b> 剩餘額度：{st.session_state.quota_remaining} | 🎯 目前基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.container():
     st.subheader("📌 核心行程 (D2 / D3)")
-    st.radio("模式", ["來回", "多點進出"], horizontal=True, key="input_trip_type")
+    st.radio("行程類型", ["來回", "多點進出"], horizontal=True, key="input_trip_type")
     c1, c2 = st.columns(2)
     if "來回" in st.session_state.input_trip_type:
         with c1: 
-            st.selectbox("🛫 台北 (TPE/KHH)", ALL_FORMATTED_CITIES, index=0, key="input_base_org")
-            st.date_input("D2 日期", value=date(2026, 6, 11), key="input_d2_dt")
+            st.selectbox("🛫 核心起點 (TPE)", ALL_FORMATTED_CITIES, index=0, key="input_base_org")
+            st.date_input("D2 去程日期", value=date(2026, 6, 11), key="input_d2_dt")
         with c2:
-            st.selectbox("🛬 目的地 (如 PRG)", ALL_FORMATTED_CITIES, index=5, key="input_base_dst")
-            st.date_input("D3 日期", value=date(2026, 6, 25), key="input_d3_dt")
+            st.selectbox("🛬 核心終點", ALL_FORMATTED_CITIES, index=5, key="input_base_dst")
+            st.date_input("D3 回程日期", value=date(2026, 6, 25), key="input_d3_dt")
         d2_o, d2_d, d3_o, d3_d = st.session_state.input_base_org.split(" ")[0], st.session_state.input_base_dst.split(" ")[0], st.session_state.input_base_dst.split(" ")[0], st.session_state.input_base_org.split(" ")[0]
     else:
         with c1:
@@ -154,36 +151,32 @@ with st.container():
     with cr1:
         st.multiselect("D1 區域過濾", list(CI_GLOBAL_HUBS.keys()), key="input_d1_reg", on_change=on_region_change_d1)
         d1_opt = [f"{c} ({n})" for r in st.session_state.input_d1_reg for c, n in CI_GLOBAL_HUBS[r].items()] if st.session_state.input_d1_reg else ALL_FORMATTED_CITIES
-        st.multiselect("📍 D1 起點", d1_opt, key="input_d1_hubs")
+        st.multiselect("📍 D1 起點庫", d1_opt, key="input_d1_hubs")
         st.date_input("📅 D1 日期", value=(date(2026, 6, 10),), key="input_d1_dates")
     with cr4:
-        d4_hubs = st.session_state.input_d1_hubs if st.session_state.input_sync else st.multiselect("📍 D4 終點", ALL_FORMATTED_CITIES, key="input_d4_hubs")
-        if st.session_state.input_sync: st.info("已同步 D1")
+        d4_hubs = st.session_state.input_d1_hubs if st.session_state.input_sync else st.multiselect("📍 D4 終點庫", ALL_FORMATTED_CITIES, key="input_d4_hubs")
         st.date_input("📅 D4 日期", value=(date(2026, 6, 26),), key="input_d4_dates")
 
     cab_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
     st.selectbox("艙等", list(cab_map.keys()), key="input_cabin")
-    st.checkbox("自動抓取當前直飛價作為基準", value=True, key="input_auto_ref")
-    st.number_input("手動基準預算 (若關閉自動)", value=200000, key="input_manual_ref")
+    st.checkbox("自動對標直飛價", value=True, key="input_auto_ref")
+    st.number_input("手動基準預算", value=200000, key="input_manual_ref")
 
 # --- 核心執行 ---
 if not st.session_state.engine_running:
-    if st.button("🚀 啟動自動對標獵殺", use_container_width=True):
+    if st.button("🚀 啟動極限 HYPER-DRIVE 獵殺", use_container_width=True):
         d1_in, d4_in = st.session_state.input_d1_dates, st.session_state.input_d4_dates
         d1_s, d1_e = (d1_in[0], d1_in[-1]) if isinstance(d1_in, (list, tuple)) else (d1_in, d1_in)
         d4_s, d4_e = (d4_in[0], d4_in[-1]) if isinstance(d4_in, (list, tuple)) else (d4_in, d4_in)
         
-        # 1. 抓取直飛基準價
         final_ref = st.session_state.input_manual_ref
         if st.session_state.input_auto_ref:
-            with st.spinner("🎯 正在校準直飛市場價..."):
+            with st.spinner("🎯 校準中..."):
                 direct_legs = [{"fromId": f"{d2_o}.AIRPORT", "toId": f"{d2_d}.AIRPORT", "date": st.session_state.input_d2_dt.strftime("%Y-%m-%d")},
                                {"fromId": f"{d3_o}.AIRPORT", "toId": f"{d3_d}.AIRPORT", "date": st.session_state.input_d3_dt.strftime("%Y-%m-%d")}]
                 res = fetch_booking_bundle(direct_legs, cab_map[st.session_state.input_cabin])
                 if res: final_ref = res['total']; st.session_state.ref_price = final_ref
-                else: st.warning("無法抓取直飛價，改用手動預算。")
 
-        # 2. 生成任務
         d1_ts, d4_ts = [d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days+1)], [d4_s + timedelta(days=i) for i in range((d4_e-d4_s).days+1)]
         tasks = []
         for h1_r, h4_r in product(st.session_state.input_d1_hubs, d4_hubs):
@@ -200,10 +193,10 @@ if not st.session_state.engine_running:
             st.rerun()
 
 if st.session_state.engine_running:
-    total, curr, BATCH = len(st.session_state.task_list), st.session_state.task_idx, 120
-    st.progress(min(curr/total, 1.0), text=f"🏎️ 曲速獵殺中: {curr}/{total}")
+    total, curr, BATCH = len(st.session_state.task_list), st.session_state.task_idx, 300 # 🚀 星際躍遷批次
+    st.progress(min(curr/total, 1.0), text=f"⚡ HYPER-DRIVE 執行中: {curr}/{total}")
     batch = st.session_state.task_list[curr : curr + BATCH]
-    with ThreadPoolExecutor(max_workers=40) as exe:
+    with ThreadPoolExecutor(max_workers=60) as exe: # 🏎️ 極限併發
         futures = {exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3], t[4], t[5]): t for t in batch}
         for f in as_completed(futures):
             res = f.result()
@@ -217,7 +210,7 @@ if st.session_state.engine_running:
 
 if not st.session_state.engine_running and st.session_state.valid_offers:
     res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
-    st.success(f"🎉 獵殺完畢！共捕獲 {len(res)} 組獲利票。")
+    st.success(f"🎉 獵殺完畢！共獲 <b>{len(res)}</b> 組獲利票。")
     for r in res[:100]:
-        with st.expander(f"💰 {r['total']:,} | 🔥 省 {r['ref']-r['total']:,} | {r['h1']}({r['d1']}) ➔ {r['h4']}({r['d4']})"):
+        with st.expander(f"💰 {r['total']:,} | 🔥 省 {r['ref']-r['total']:,} | {r['h1']} ({r['d1']}) ➔ {r['h4']} ({r['d4']})"):
             st.write(f"航班：{' | '.join(r['legs'])}")
