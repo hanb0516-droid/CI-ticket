@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v38.1 MATRIX", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v38.2 FIX", page_icon="🎯", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -98,16 +98,14 @@ def send_detailed_email(res, ref, target_str, is_range, elapsed, dps):
     msg['From'], msg['To'] = S_SENDER, S_RECEIVER
     msg['Subject'] = f"✈️ [Flight Radar] {target_str} (最低 {res[0]['total']:,} TWD)"
     
-    # 戰情統計區塊
     stats_html = f"<div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px;'><b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br><b>⚡ 平均 DPS (RPS)：</b> {dps:.2f} 筆/秒<br><b>🎯 直飛基準價：</b> {ref:,} TWD</div>"
     
     if not is_range:
         body = f"<h2>單一日期精確搜尋結果</h2>{stats_html}<h3>📋 獲利神票榜</h3>{generate_table_html(res, ref)}"
     else:
-        # 區間日期：滿配大禮包 (統計 + 表格 + 分站點矩陣)
         body = f"<h2>日期區間綜合分析報告</h2>{stats_html}<h3>📋 獲利神票榜 (Top 50)</h3>{generate_table_html(res, ref)}<hr><h3>📊 各站點專屬熱力圖</h3>"
         routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in res)))
-        for route in routes[:10]: # 限制信件大小，最多放 10 張矩陣圖
+        for route in routes[:10]:
             route_data = [r for r in res if f"{r['h1']} ➔ {r['h4']}" == route]
             body += generate_matrix_html(route_data, ref, f"路線組合：{route}")
             
@@ -136,12 +134,18 @@ async def fetch_api(client, sem, task_data, rid):
                     valid = []
                     for o in raw.get('data', {}).get('flightOffers', []):
                         l_sum, is_ci = [], True
-                        for seg in o.get('segments', []):
-                            f = seg.get('legs', [{}])[0].get('flightInfo', {})
-                            if f.get('carrierInfo', {}).get('operatingCarrier') != "CI": is_ci = False; break
-                            l_sum.append(f"CI{f.get('flightNumber', '')}")
+                        segs = o.get('segments', [])
+                        # 🛠️ 修復點 2：解析器強化，支援聯營航班(Marketing)與多重轉機(Layovers)
+                        for seg in segs:
+                            for leg in seg.get('legs', []):
+                                f = leg.get('flightInfo', {})
+                                c_info = f.get('carrierInfo', {})
+                                op = c_info.get('operatingCarrier', '')
+                                mk = c_info.get('marketingCarrier', '')
+                                if op != "CI" and mk != "CI": is_ci = False
+                                l_sum.append(f"{mk or op}{f.get('flightNumber', '')}")
                         p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
-                        if is_ci and len(l_sum) == len(legs):
+                        if is_ci and len(segs) == len(legs):
                             valid.append({"total": p, "legs": l_sum, "h1": h1[:3], "h4": h4[:3], "d1": d1, "d4": d4})
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 elif res.status_code == 429: await asyncio.sleep(1.5 + random.random())
@@ -159,6 +163,8 @@ with st.sidebar:
     cab_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
     cab = st.selectbox("艙等", list(cab_map.keys()))
     workers = st.slider("併發上限 (RPS調整)", 20, 100, 80)
+    # 🛠️ 修復點 1：透視模式開關回歸！
+    show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     email_on = st.checkbox("📧 完成後發送報告", value=True)
     auto_ref = st.checkbox("自動對標直飛", value=True)
     manual_ref = st.number_input("手動基準", value=200000)
@@ -232,7 +238,10 @@ async def start_hunt():
         for i, coro in enumerate(asyncio.as_completed(coros)):
             if st.session_state.run_id != rid: return
             r = await coro
-            if r and (ref_val - r['total'] >= 0): final_res.append(r)
+            
+            # 🛠️ 修復點 3：結合 show_all 開關，真正實現透視所有結果
+            if r and (show_all or (ref_val - r['total'] >= 0)): final_res.append(r)
+            
             if i % 10 == 0 or i == len(tasks)-1:
                 elapsed_now = time.time() - total_start_time
                 rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
@@ -250,7 +259,7 @@ async def start_hunt():
     
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺 (v38.1 港澳版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v38.2 尋票修復版)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
