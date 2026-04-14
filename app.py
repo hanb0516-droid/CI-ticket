@@ -7,21 +7,36 @@ from datetime import datetime, timedelta, date
 from itertools import product
 
 # ==========================================
-# 0. 全局初始化 & 極簡戰情風格
+# 0. 全局初始化 & 性能快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v31.1 FIX", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v31.2 SMOOTH", page_icon="🚀", layout="wide")
+
+# 🛡️ 排雷 1：快取靜態資料，杜絕重複計算導致的 Lag
+@st.cache_data
+def get_static_data():
+    hubs = {
+        "台灣": {"TPE": "台北桃園", "KHH": "高雄小港"},
+        "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
+        "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
+        "歐洲": {"FRA": "法蘭克福", "AMS": "阿姆斯特丹", "LHR": "倫敦", "VIE": "維也納", "FCO": "羅馬", "PRG": "布拉格"},
+        "北美洲": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "JFK": "紐約", "YVR": "溫哥華"},
+        "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
+    }
+    all_c = [f"{c} ({n})" for r, cities in hubs.items() for c, n in cities.items()]
+    def find_idx(code):
+        for i, s in enumerate(all_c):
+            if s.startswith(code): return i
+        return 0
+    return hubs, all_c, find_idx("TPE"), find_idx("PRG"), find_idx("FRA")
+
+CI_GLOBAL_HUBS, ALL_CITIES, IDX_TPE, IDX_PRG, IDX_FRA = get_static_data()
 
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     [data-testid="stAppViewContainer"], .stApp { background-color: #0b0e14; color: #e0e0e0; }
-    html, body, [class*="st-"] { font-size: 13px !important; }
-    .status-card {
-        padding: 15px; background: rgba(0, 230, 118, 0.08); border-radius: 10px; border: 1px solid #00e676; margin: 10px 0;
-    }
-    .quota-box {
-        padding: 10px; background: rgba(0, 230, 118, 0.03); border-radius: 8px; border: 1px solid #00e676; margin-bottom: 20px; margin-top: 15px;
-    }
+    .status-card { padding: 12px; background: rgba(0, 230, 118, 0.08); border-radius: 8px; border: 1px solid #00e676; margin: 10px 0; }
+    .quota-box { padding: 10px; background: rgba(0, 230, 118, 0.03); border-radius: 8px; border: 1px solid #00e676; margin: 15px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -30,25 +45,9 @@ try:
 except KeyError:
     st.error("🚨 找不到 API_KEY"); st.stop()
 
-# 狀態管理
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 if "ref_price" not in st.session_state: st.session_state.ref_price = 0
 if "is_hunting" not in st.session_state: st.session_state.is_hunting = False
-
-CI_GLOBAL_HUBS = {
-    "台灣": {"TPE": "台北桃園", "KHH": "高雄小港"},
-    "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
-    "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
-    "歐洲": {"FRA": "法蘭克福", "AMS": "阿姆斯特丹", "LHR": "倫敦", "VIE": "維也納", "FCO": "羅馬", "PRG": "布拉格"},
-    "北美洲": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅 Seattle", "JFK": "紐約", "YVR": "溫哥華"},
-    "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
-}
-ALL_CITIES = [f"{c} ({n})" for r, cities in CI_GLOBAL_HUBS.items() for c, n in cities.items()]
-
-def get_city_idx(target_code):
-    for i, city_str in enumerate(ALL_CITIES):
-        if city_str.startswith(target_code): return i
-    return 0
 
 # ==========================================
 # 1. 核心異步引擎
@@ -57,7 +56,6 @@ async def fetch_task(client, sem, task_data):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     legs, cabin, h1, h4, d1, d4 = task_data
-    
     async with sem:
         for attempt in range(2):
             try:
@@ -83,16 +81,16 @@ async def fetch_task(client, sem, task_data):
         return None
 
 # ==========================================
-# 2. UI 設計
+# 2. UI 佈局 (🛡️ 排雷 2：優化渲染順序)
 # ==========================================
-st.markdown(f'<div class="quota-box">💎 <b>TURBO 旗艦修正版：</b> 區域自動連動恢復 | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">💎 <b>UI 流暢度優化版：</b> 已快取靜態資源 | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ 引擎超頻")
+    st.header("⚙️ 引擎配置")
     cabin_opt = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
     cabin = st.selectbox("艙等", list(cabin_opt.keys()))
     show_all = st.checkbox("👁️ 透視模式", value=False)
-    concurrency = st.slider("併發壓力 (Worker數)", 20, 100, 50)
+    concurrency = st.slider("併發壓力", 20, 100, 50)
     st.markdown("---")
     auto_ref = st.checkbox("自動校準基準價", value=True)
     manual_ref = st.number_input("手動基準價", value=200000)
@@ -100,50 +98,47 @@ with st.sidebar:
         st.session_state.is_hunting = False; st.rerun()
 
 with st.container():
-    st.subheader("📌 核心 (D2/D3)")
-    trip_mode = st.radio("模式", ["來回", "多點進出"], horizontal=True)
+    st.subheader("📌 核心行程 (D2 / D3)")
+    trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
     c1, c2 = st.columns(2)
     if trip_mode == "來回":
         with c1:
-            b_org = st.selectbox("起點", ALL_CITIES, index=get_city_idx("TPE"))
+            b_org = st.selectbox("起點", ALL_CITIES, index=IDX_TPE)
             d2_dt = st.date_input("D2 日期", value=date(2026, 6, 11))
         with c2:
-            b_dst = st.selectbox("終點", ALL_CITIES, index=get_city_idx("PRG"))
+            b_dst = st.selectbox("終點", ALL_CITIES, index=IDX_PRG)
             d3_dt = st.date_input("D3 日期", value=date(2026, 6, 25))
         d2o, d2d, d3o, d3d = b_org.split(" ")[0], b_dst.split(" ")[0], b_dst.split(" ")[0], b_org.split(" ")[0]
     else:
         with c1:
-            d2os = st.selectbox("D2 起點", ALL_CITIES, index=get_city_idx("TPE"))
-            d2ds = st.selectbox("D2 終點", ALL_CITIES, index=get_city_idx("PRG"))
+            d2os = st.selectbox("D2 起點", ALL_CITIES, index=IDX_TPE)
+            d2ds = st.selectbox("D2 終點", ALL_CITIES, index=IDX_PRG)
             d2_dt = st.date_input("D2 出發", value=date(2026, 6, 11))
         with c2:
-            d3os = st.selectbox("D3 起點", ALL_CITIES, index=get_city_idx("FRA"))
-            d3ds = st.selectbox("D3 終點", ALL_CITIES, index=get_city_idx("TPE"))
+            d3os = st.selectbox("D3 起點", ALL_CITIES, index=IDX_FRA)
+            d3ds = st.selectbox("D3 終點", ALL_CITIES, index=IDX_TPE)
             d3_dt = st.date_input("D3 回程", value=date(2026, 6, 25))
         d2o, d2d, d3o, d3d = d2os.split(" ")[0], d2ds.split(" ")[0], d3os.split(" ")[0], d3ds.split(" ")[0]
 
 st.markdown("---")
 with st.container():
-    st.subheader("📡 雷達 (D1/D4)")
+    st.subheader("📡 雷達範圍 (D1 / D4)")
     st.checkbox("👯 D4 同步 D1", value=True, key="sync_ui")
     cr1, cr4 = st.columns(2)
     with cr1:
-        # 🛡️ 排雷 1：修復區域自動帶入邏輯
         d1_regs = st.multiselect("區域過濾", list(CI_GLOBAL_HUBS.keys()))
         if d1_regs:
             options = [f"{c} ({n})" for r in d1_regs for c, n in CI_GLOBAL_HUBS[r].items()]
             d1_hubs = st.multiselect("📍 D1 起點", options=options, default=options)
         else:
             d1_hubs = st.multiselect("📍 D1 起點", options=ALL_CITIES)
-            
         d1_range = st.date_input("D1 範圍", value=(date(2026, 6, 10), date(2026, 6, 10)))
     with cr4:
-        # 🛡️ 排雷 2：確認同步正確繼承
         d4_hubs = d1_hubs if st.session_state.sync_ui else st.multiselect("📍 D4 終點", ALL_CITIES)
         d4_range = st.date_input("D4 範圍", value=(date(2026, 6, 26), date(2026, 6, 26)))
 
 # ==========================================
-# 3. 獵殺邏輯
+# 3. 獵殺邏輯 (🛡️ 排雷 3 & 4)
 # ==========================================
 async def start_hunt():
     d1_s, d1_e = (d1_range[0], d1_range[-1]) if isinstance(d1_range, (list, tuple)) else (d1_range, d1_range)
@@ -172,7 +167,7 @@ async def start_hunt():
     async with httpx.AsyncClient(timeout=30.0, limits=limits) as client:
         ref_val = manual_ref
         if auto_ref:
-            status_area.info("🎯 校準直飛價格...")
+            status_area.info("🎯 校準中...")
             d_legs = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
                       {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")}]
             res = await fetch_task(client, asyncio.Semaphore(1), (d_legs, cabin_opt[cabin], "", "", "", ""))
@@ -192,11 +187,9 @@ async def start_hunt():
             curr = time.time()
             if curr - last_ui > 1.2 or (i + 1) == len(raw_tasks):
                 done = i + 1
-                elapsed = curr - start_time
-                # 🛡️ 排雷 3：防秒結除以零
-                rps = done / elapsed if elapsed > 0.1 else 0
+                rps = done / (curr - start_time) if curr > start_time else 0
                 prog_bar.progress(done / len(raw_tasks))
-                status_area.markdown(f'<div class="status-card"><b>進度:</b> {done}/{len(raw_tasks)} | <b>時速:</b> <span style="color:#00e676; font-size:16px;">{rps:.1f} RPS</span> | <b>已獲取:</b> {len(results)}</div>', unsafe_allow_html=True)
+                status_area.markdown(f'<div class="status-card"><b>進度:</b> {done}/{len(raw_tasks)} | <b>時速:</b> {rps:.1f} RPS | <b>已獲取:</b> {len(results)}</div>', unsafe_allow_html=True)
                 last_ui = curr
 
         st.session_state.valid_offers = results
@@ -212,7 +205,7 @@ if st.button("🔥 啟動極速獵殺", disabled=st.session_state.is_hunting, us
         st.rerun()
 
 # ==========================================
-# 📊 矩陣展示
+# 📊 矩陣展示 (🛡️ 排雷 5：放在最後渲染)
 # ==========================================
 def render_matrix(res_list, ref):
     if not res_list: return ""
@@ -220,7 +213,7 @@ def render_matrix(res_list, ref):
     d4_dates = sorted(list(set(r['d4'] for r in res_list)))
     matrix = {}
     prices = [r['total'] for r in res_list]
-    min_p, max_p = min(prices) if prices else 0, max(prices) if prices else 0
+    min_p, max_p = min(prices), max(prices)
     for r in res_list:
         key = (r['d1'], r['d4'])
         if key not in matrix or r['total'] < matrix[key]['total']: matrix[key] = r
@@ -233,7 +226,6 @@ def render_matrix(res_list, ref):
             rec = matrix.get((d1, d4))
             if rec:
                 save = ref - rec['total']
-                # 🛡️ 排雷 5：除以零防護
                 alpha = 0.8 if max_p <= min_p else 0.8 - 0.7 * ((rec['total'] - min_p) / (max_p - min_p))
                 bg = f"rgba(0, 230, 118, {alpha:.2f})" if save >= 0 else "rgba(255, 182, 193, 0.4)"
                 h += f'<td style="background:{bg}; padding:4px;"><b>{rec["total"]:,}</b><br><span style="color:{"#d32f2f" if save>=0 else "#1976d2"}">{"省" if save>=0 else "貴"}{abs(save):,}</span></td>'
@@ -250,5 +242,5 @@ if st.session_state.valid_offers:
         st.markdown(render_matrix(res, st.session_state.ref_price), unsafe_allow_html=True)
         for r in res[:20]:
             save = st.session_state.ref_price - r['total']
-            with st.expander(f"💰 {r['total']:,} | {'省' if save>=0 else '貴'} {abs(save):,} ({r['h1'][:3]}➔{r['h4'][:3]})"):
+            with st.expander(f"💰 {r['total']:,} | {r['h1'][:3]}➔{r['h4'][:3]} ({r['d1']}~{r['d4']})"):
                 st.write(f"航班: {' | '.join(r['legs'])}")
