@@ -7,9 +7,9 @@ from datetime import datetime, timedelta, date
 from itertools import product
 
 # ==========================================
-# 0. 全局初始化 & 旗艦風格
+# 0. 全局初始化 & 極簡風格
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | ULTRA v30.3", page_icon="💎", layout="wide")
+st.set_page_config(page_title="Flight Actuary | ULTRA v30.4", page_icon="💎", layout="wide")
 
 st.markdown("""
 <style>
@@ -20,7 +20,7 @@ st.markdown("""
         padding: 12px; background: rgba(0, 230, 118, 0.1); border-radius: 8px; border: 1px solid #00e676; margin: 10px 0;
     }
     .quota-box {
-        padding: 10px; background: rgba(0, 230, 118, 0.05); border-radius: 8px; border: 1px solid #00e676; margin-bottom: 20px; margin-top: 10px;
+        padding: 10px; background: rgba(0, 230, 118, 0.05); border-radius: 8px; border: 1px solid #00e676; margin-bottom: 20px; margin-top: 15px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -81,9 +81,9 @@ async def fetch_task(client, sem, task_data):
         return None
 
 # ==========================================
-# 2. UI 設計 (極簡化)
+# 2. UI 設計 (已拔除標題，極簡化)
 # ==========================================
-# 移除了閃電與漸層大標題，直接顯示狀態列
+# 畫面第一行直接顯示狀態列
 st.markdown(f'<div class="quota-box">💎 <b>全功能連動模式：</b> 支援開口行程 | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.sidebar:
@@ -206,6 +206,7 @@ async def start_hunt():
         st.session_state.valid_offers = results
         st.rerun()
 
+# 🛡️ 啟動按鈕防護網
 if st.button("🔥 啟動鋼鐵獵殺", disabled=st.session_state.is_hunting, use_container_width=True):
     st.session_state.valid_offers.clear()
     st.session_state.is_hunting = True
