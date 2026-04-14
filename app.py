@@ -15,12 +15,13 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v38.0 MATRIX", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v38.1 MATRIX", page_icon="🎯", layout="wide")
 
 @st.cache_data
 def get_hubs():
     h = {
         "台灣": {"TPE": "台北桃園", "KHH": "高雄小港"},
+        "港澳": {"HKG": "香港", "MFM": "澳門"},
         "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
         "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
         "歐洲": {"FRA": "法蘭克福", "AMS": "阿姆斯特丹", "LHR": "倫敦", "VIE": "維也納", "FCO": "羅馬", "PRG": "布拉格"},
@@ -225,7 +226,6 @@ async def start_hunt():
             if ref_res: ref_val = ref_res['total']; st.session_state.ref_price = ref_val
 
         sem = asyncio.Semaphore(workers)
-        # ⏱️ 排雷一：開始精確計時
         total_start_time = time.time()
         coros = [fetch_api(client, sem, t, rid) for t in tasks]
         
@@ -238,7 +238,6 @@ async def start_hunt():
                 rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
                 bar.progress((i+1)/len(tasks), text=f"⚡ 獵殺中: {i+1}/{len(tasks)} | 速時: {rps:.1f} RPS | 鎖定: {len(final_res)}")
 
-        # ⏱️ 記錄總結算效能
         total_elapsed = time.time() - total_start_time
         final_rps = len(tasks) / total_elapsed if total_elapsed > 0 else 0
         st.session_state.perf_stats = {"time": total_elapsed, "dps": final_rps}
@@ -251,7 +250,7 @@ async def start_hunt():
     
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺 (v38 戰情版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v38.1 港澳版)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
@@ -261,7 +260,6 @@ if st.button("🚀 啟動極速獵殺 (v38 戰情版)", use_container_width=True
 if st.session_state.valid_offers:
     st.markdown("---")
     
-    # 顯示效能統計數據
     p_time = st.session_state.perf_stats['time']
     p_dps = st.session_state.perf_stats['dps']
     st.markdown(f"""
@@ -283,7 +281,6 @@ if st.session_state.valid_offers:
         st.dataframe(df, use_container_width=True, hide_index=True)
         
     with t2:
-        # 🛡️ 排雷二：依照不同的 D1➔D4 站點組合，切分成獨立的矩陣
         routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in st.session_state.valid_offers)))
         if not routes:
             st.info("無獲利矩陣資料")
