@@ -5,6 +5,8 @@ import time
 import os
 import pandas as pd
 import smtplib
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, date
@@ -12,9 +14,9 @@ from itertools import product
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
-# 0. UI 初始化與精緻化 CSS
+# 0. UI 初始化與全局連線池 (防爆安全池)
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | SMART AUTO", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Flight Actuary | GOLD EDITION", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -42,7 +44,20 @@ try:
     PWD = st.secrets.get("EMAIL_PASSWORD")
     RECEIVER = st.secrets.get("EMAIL_RECEIVER")
 except KeyError:
-    st.error("🚨 Secrets 配置有誤！"); st.stop()
+    st.error("🚨 Secrets 配置有誤！請檢查環境變數。"); st.stop()
+
+# 🛡️ 排雷 #1：TCP 池加大至 100，確保 60 併發不會互相排擠
+if "http_session" not in st.session_state:
+    session = requests.Session()
+    retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+    adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    session.headers.update({
+        "x-rapidapi-key": BOOKING_API_KEY,
+        "x-rapidapi-host": "booking-com15.p.rapidapi.com"
+    })
+    st.session_state.http_session = session
 
 # 狀態鎖定
 if "engine_running" not in st.session_state: st.session_state.engine_running = False
@@ -54,17 +69,14 @@ if "ref_price" not in st.session_state: st.session_state.ref_price = 0
 
 # 動態引擎參數
 if "current_workers" not in st.session_state: st.session_state.current_workers = 20
-if "current_batch" not in st.session_state: st.session_state.current_batch = 60
+if "current_batch" not in st.session_state: st.session_state.current_batch = 100
 if "engine_mode_name" not in st.session_state: st.session_state.engine_mode_name = "待命中"
 
 CI_GLOBAL_HUBS = {
     "台灣": {"TPE": "台北桃園", "KHH": "高雄小港"},
     "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
     "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
-    "港澳大陸": {"HKG": "香港", "MFM": "澳門", "PEK": "北京", "PVG": "上海浦東", "CAN": "廣州", "SZX": "深圳"},
-    "北美洲": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "JFK": "紐約", "YVR": "溫哥華"},
-    "歐洲": {"FRA": "法蘭克福", "AMS": "阿姆斯特丹", "LHR": "倫敦", "VIE": "維也納", "FCO": "羅馬", "PRG": "布拉格"},
-    "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
+    "港澳大陸": {"HKG": "香港", "MFM": "澳門", "PEK": "北京", "PVG": "上海浦東", "CAN": "廣州", "SZX": "深圳"}
 }
 ALL_FORMATTED_CITIES = [f"{code} ({name})" for region, cities in CI_GLOBAL_HUBS.items() for code, name in cities.items()]
 
@@ -74,7 +86,7 @@ def on_region_change_d1():
     else: st.session_state.input_d1_hubs = []
 
 # ==========================================
-# 📊 矩陣生成器
+# 📊 矩陣生成器 (🛡️ 排雷 #5：極值防護)
 # ==========================================
 def render_matrix_html(res_list, ref, title_str):
     if not res_list: return "<p style='color: white;'>無符合條件數據</p>"
@@ -106,7 +118,8 @@ def render_matrix_html(res_list, ref, title_str):
             if record:
                 price, saving = record['total'], ref - record['total']
                 if saving >= 0:
-                    alpha = 0.8 if max_price == min_price else 0.8 - 0.7 * ((price - min_price) / (max_price - min_price))
+                    # 防止除以零錯誤
+                    alpha = 0.8 if max_price <= min_price else 0.8 - 0.7 * ((price - min_price) / (max_price - min_price))
                     bg_color = f"rgba(0, 230, 118, {alpha:.2f})"
                     saving_str = f"<div style='color: #d32f2f; font-weight: bold; font-size: 11px;'>省 {saving:,}</div>"
                 else:
@@ -124,46 +137,50 @@ def render_matrix_html(res_list, ref, title_str):
     return html
 
 # ==========================================
-# 1. API 引擎 (防漏單與限流處理保留)
+# 1. API 引擎 (🛡️ 排雷 #3：髒資料防護)
 # ==========================================
 def fetch_booking_bundle(legs, cabin, h1="", h4="", d1="", d4=""):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
-    headers = {"x-rapidapi-key": BOOKING_API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
-    
-    for attempt in range(3):
-        try:
-            res = requests.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=15)
-            rem = res.headers.get('x-ratelimit-requests-remaining')
-            if rem: st.session_state.quota_remaining = rem
+    try:
+        res = st.session_state.http_session.get(
+            url, 
+            params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, 
+            timeout=15
+        )
+        rem = res.headers.get('x-ratelimit-requests-remaining')
+        if rem: st.session_state.quota_remaining = rem
+        
+        if res.status_code == 200:
+            raw = res.json()
+            valid = []
+            # 深層防護：若 flightOffers 為空或不存在，安全跳過
+            for offer in raw.get('data', {}).get('flightOffers', []):
+                l_sum, is_ci = [], True
+                segments = offer.get('segments', [])
+                for seg in segments:
+                    legs_data = seg.get('legs', [{}])
+                    if not legs_data: continue
+                    car = legs_data[0].get('flightInfo', {}).get('carrierInfo', {}).get('operatingCarrier') or '??'
+                    if car != "CI": is_ci = False; break
+                    l_sum.append(f"{car}{legs_data[0].get('flightInfo', {}).get('flightNumber', '')}")
+                
+                total_price = offer.get('priceBreakdown', {}).get('total', {}).get('units', 0)
+                if is_ci and len(l_sum) == (4 if h1 else 2) and total_price > 0:
+                    valid.append({"total": total_price, "legs": l_sum, "h1": h1, "h4": h4, "d1": d1, "d4": d4})
             
-            if res.status_code == 200:
-                raw = res.json()
-                valid = []
-                for offer in raw.get('data', {}).get('flightOffers', []):
-                    l_sum, is_ci = [], True
-                    for seg in offer.get('segments', []):
-                        car = seg.get('legs', [{}])[0].get('flightInfo', {}).get('carrierInfo', {}).get('operatingCarrier') or '??'
-                        if car != "CI": is_ci = False; break
-                        l_sum.append(f"{car}{seg.get('legs', [{}])[0].get('flightInfo', {}).get('flightNumber', '')}")
-                    if is_ci and len(l_sum) == (4 if h1 else 2):
-                        valid.append({"total": offer.get('priceBreakdown', {}).get('total', {}).get('units', 0), "legs": l_sum, "h1": h1, "h4": h4, "d1": d1, "d4": d4})
-                if valid: return sorted(valid, key=lambda x: x['total'])[0]
-                return None 
-            elif res.status_code == 429:
-                time.sleep(1.5)
-                continue
-            elif res.status_code == 403:
-                return "QUOTA_EXCEEDED"
-        except:
-            time.sleep(1)
-            continue
+            if valid: return sorted(valid, key=lambda x: x['total'])[0]
+            return None
+        elif res.status_code == 403:
+            return "QUOTA_EXCEEDED"
+    except Exception:
+        pass
     return None
 
 # ==========================================
 # 2. UI 面板
 # ==========================================
-st.markdown('<p class="custom-title">⚡ ULTRA SMART-AUTO RADAR</p>', unsafe_allow_html=True)
-st.markdown(f'<div class="quota-box">🤖 <b>智慧變速模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
+st.markdown('<p class="custom-title">⚡ GOLD EDITION RADAR</p>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">🛡️ <b>TCP渦輪防護模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.container():
     st.subheader("📌 核心行程 (D2 / D3)")
@@ -191,8 +208,8 @@ with st.container():
 
     st.markdown("---")
     st.subheader("🌍 外站雷達 (D1 / D4)")
-    st.checkbox("👯 D4 站點庫自動帶入 D1", value=True, key="input_sync_ui")
-    st.checkbox("🔒 嚴格限制：D1/D4 必須同站點進出", value=False, key="input_strict_match")
+    st.checkbox("👯 D4 自動帶入 D1", value=True, key="input_sync_ui")
+    st.checkbox("🔒 嚴格限制：必須同站點進出", value=False, key="input_strict_match")
 
     cr1, cr4 = st.columns(2)
     with cr1:
@@ -213,18 +230,23 @@ with st.container():
         st.number_input("手動基準預算", value=200000, key="input_manual_ref")
     with colB:
         st.markdown("##### 🛠️ 進階選項")
-        st.checkbox("👁️ 開啟透視模式：顯示所有結果 (含賠錢票)", value=False, key="input_show_all")
+        st.checkbox("👁️ 透視模式：顯示所有結果 (含賠錢票)", value=False, key="input_show_all")
 
-# --- 核心執行 (智慧自適應降載) ---
+# --- 核心執行 ---
 if not st.session_state.engine_running:
-    if st.button("🚀 啟動智慧自適應獵殺", use_container_width=True):
+    if st.button("🚀 啟動 GOLD 旗艦獵殺", use_container_width=True):
+        # 🛡️ 排雷 #4：強制清空歷史快取，避免狀態污染
+        st.session_state.valid_offers.clear()
+        st.session_state.task_list.clear()
+        st.session_state.task_idx = 0
+        
         d1_in, d4_in = st.session_state.input_d1_dates, st.session_state.input_d4_dates
         d1_s, d1_e = (d1_in[0], d1_in[-1]) if isinstance(d1_in, (list, tuple)) else (d1_in, d1_in)
         d4_s, d4_e = (d4_in[0], d4_in[-1]) if isinstance(d4_in, (list, tuple)) else (d4_in, d4_in)
         
         final_ref = st.session_state.input_manual_ref
         if st.session_state.input_auto_ref:
-            with st.spinner("🎯 正在校準直飛價..."):
+            with st.spinner("🎯 校準直飛價中..."):
                 direct_legs = [{"fromId": f"{d2_o}.AIRPORT", "toId": f"{d2_d}.AIRPORT", "date": st.session_state.input_d2_dt.strftime("%Y-%m-%d")},
                                {"fromId": f"{d3_o}.AIRPORT", "toId": f"{d3_d}.AIRPORT", "date": st.session_state.input_d3_dt.strftime("%Y-%m-%d")}]
                 res = fetch_booking_bundle(direct_legs, cab_map[st.session_state.input_cabin])
@@ -244,31 +266,32 @@ if not st.session_state.engine_running:
                              {"fromId": f"{d3_d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                         tasks.append((l, cab_map[st.session_state.input_cabin], h1_r, h4_r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d"), final_ref))
         
-        # 🤖 智慧變速箱邏輯
-        if tasks:
+        # 🛡️ 排雷 #2：防呆雷達，處理空任務情況
+        if not tasks:
+            st.error("⚠️ 邏輯衝突：請確認您選擇的「D1/D4 站點未為空」，且「D1 日期未晚於 D2」、「D4 日期未早於 D3」。")
+        else:
             total_t = len(tasks)
-            if total_t <= 100:
+            if total_t <= 50:
                 st.session_state.current_batch = total_t
-                st.session_state.current_workers = 60
-                st.session_state.engine_mode_name = "⚡ 3檔：星際躍遷 (全速)"
-            elif total_t <= 400:
-                st.session_state.current_batch = 100
-                st.session_state.current_workers = 40
-                st.session_state.engine_mode_name = "🚀 2檔：曲速巡航 (平衡)"
+                st.session_state.current_workers = 35
+                st.session_state.engine_mode_name = "⚡ 跑車檔：高速快查"
+            elif total_t <= 300:
+                st.session_state.current_batch = 150
+                st.session_state.current_workers = 30
+                st.session_state.engine_mode_name = "🚀 休旅檔：穩健巡航"
             else:
-                st.session_state.current_batch = 60
-                st.session_state.current_workers = 20
-                st.session_state.engine_mode_name = "🛡️ 1檔：陣列防護 (穩態)"
+                st.session_state.current_batch = 400
+                st.session_state.current_workers = 25
+                st.session_state.engine_mode_name = "🛡️ 戰車檔：海量吞吐"
 
-            st.session_state.task_list, st.session_state.task_idx, st.session_state.valid_offers, st.session_state.engine_running = tasks, 0, [], True
+            st.session_state.task_list, st.session_state.engine_running = tasks, True
             st.rerun()
 
 if st.session_state.engine_running:
     total, curr = len(st.session_state.task_list), st.session_state.task_idx
-    BATCH = st.session_state.current_batch
-    WORKERS = st.session_state.current_workers
+    BATCH, WORKERS = st.session_state.current_batch, st.session_state.current_workers
     
-    st.progress(min(curr/total, 1.0), text=f"{st.session_state.engine_mode_name} | 進度: {curr}/{total} | 併發數: {WORKERS}")
+    st.progress(min(curr/total, 1.0), text=f"{st.session_state.engine_mode_name} | 進度: {curr}/{total} | 引擎併發數: {WORKERS}")
     batch = st.session_state.task_list[curr : curr + BATCH]
     
     with ThreadPoolExecutor(max_workers=WORKERS) as exe:
