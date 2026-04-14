@@ -9,7 +9,7 @@ from itertools import product
 # ==========================================
 # 0. 全局初始化 & 極簡風格
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | ULTRA v30.5", page_icon="💎", layout="wide")
+st.set_page_config(page_title="Flight Actuary | ULTRA v30.6", page_icon="💎", layout="wide")
 
 st.markdown("""
 <style>
@@ -44,10 +44,8 @@ CI_GLOBAL_HUBS = {
     "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
 }
 
-# 🛡️ 排雷 3：變數命名潔癖，明確使用 code, name
 ALL_CITIES = [f"{code} ({name})" for r, cities in CI_GLOBAL_HUBS.items() for code, name in cities.items()]
 
-# 🛡️ 排雷 1：動態取得索引，避免寫死 index 導致陣列越界
 def get_city_idx(target_code):
     for i, city_str in enumerate(ALL_CITIES):
         if city_str.startswith(target_code): return i
@@ -58,7 +56,7 @@ idx_prg = get_city_idx("PRG")
 idx_fra = get_city_idx("FRA")
 
 # ==========================================
-# 1. 異步核心 (鑽石級穩定版)
+# 1. 異步核心 (鑽石級穩定版 - 未更動)
 # ==========================================
 async def fetch_task(client, sem, task_data):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
@@ -93,9 +91,8 @@ async def fetch_task(client, sem, task_data):
         return None
 
 # ==========================================
-# 2. UI 設計
+# 2. UI 設計 
 # ==========================================
-# 第一行直接顯示狀態列 (無干擾)
 st.markdown(f'<div class="quota-box">💎 <b>全功能連動模式：</b> 支援開口行程 | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.sidebar:
@@ -118,18 +115,15 @@ with st.container():
             b_org = st.selectbox("起點", ALL_CITIES, index=idx_tpe)
             d2_dt = st.date_input("D2 去程日期", value=date(2026, 6, 11))
         with c2:
-            # 🛡️ 排雷 2：來回模式預設目的地為 PRG
             b_dst = st.selectbox("終點", ALL_CITIES, index=idx_prg)
             d3_dt = st.date_input("D3 回程日期", value=date(2026, 6, 25))
         d2o, d2d, d3o, d3d = b_org.split(" ")[0], b_dst.split(" ")[0], b_dst.split(" ")[0], b_org.split(" ")[0]
     else:
         with c1:
             d2os = st.selectbox("D2 起點", ALL_CITIES, index=idx_tpe)
-            # 🛡️ 排雷 2：多點進出 D2 目的地為 PRG
             d2ds = st.selectbox("D2 終點", ALL_CITIES, index=idx_prg)
             d2_dt = st.date_input("D2 出發日期", value=date(2026, 6, 11))
         with c2:
-            # 🛡️ 排雷 2：多點進出 D3 出發地為 FRA
             d3os = st.selectbox("D3 起點", ALL_CITIES, index=idx_fra)
             d3ds = st.selectbox("D3 終點", ALL_CITIES, index=idx_tpe)
             d3_dt = st.date_input("D3 回程日期", value=date(2026, 6, 25))
@@ -144,15 +138,23 @@ with st.container():
     
     cr1, cr4 = st.columns(2)
     with cr1:
+        # 🛡️ 排雷 1 & 2：精準連動邏輯修復
         d1_regs = st.multiselect("D1 區域過濾", list(CI_GLOBAL_HUBS.keys()))
-        d1_hubs = st.multiselect("📍 D1 起點站", [f"{c} ({n})" for r in d1_regs for c, n in CI_GLOBAL_HUBS[r].items()] if d1_regs else ALL_CITIES)
+        if d1_regs:
+            filtered_hubs = [f"{c} ({n})" for r in d1_regs for c, n in CI_GLOBAL_HUBS[r].items()]
+            d1_hubs = st.multiselect("📍 D1 起點站", options=filtered_hubs, default=filtered_hubs)
+        else:
+            d1_hubs = st.multiselect("📍 D1 起點站", options=ALL_CITIES)
+            
         d1_range = st.date_input("📅 D1 日期範圍", value=(date(2026, 6, 10), date(2026, 6, 10)))
+        
     with cr4:
+        # 🛡️ 排雷 3：D4 完美同步
         d4_hubs = d1_hubs if st.session_state.sync_ui else st.multiselect("📍 D4 終點站", ALL_CITIES)
         d4_range = st.date_input("📅 D4 日期範圍", value=(date(2026, 6, 26), date(2026, 6, 26)))
 
 # ==========================================
-# 3. 獵殺邏輯
+# 3. 獵殺邏輯 (未更動)
 # ==========================================
 async def start_hunt():
     d1_s, d1_e = (d1_range[0], d1_range[-1]) if isinstance(d1_range, (list, tuple)) else (d1_range, d1_range)
@@ -221,7 +223,6 @@ async def start_hunt():
         st.session_state.valid_offers = results
         st.rerun()
 
-# 🛡️ 啟動按鈕防護網
 if st.button("🔥 啟動鋼鐵獵殺", disabled=st.session_state.is_hunting, use_container_width=True):
     st.session_state.valid_offers.clear()
     st.session_state.is_hunting = True
@@ -233,7 +234,7 @@ if st.button("🔥 啟動鋼鐵獵殺", disabled=st.session_state.is_hunting, us
         st.session_state.is_hunting = False
 
 # ==========================================
-# 📊 矩陣展示
+# 📊 矩陣展示 (未更動)
 # ==========================================
 def render_matrix(res_list, ref):
     if not res_list: return ""
