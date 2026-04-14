@@ -13,9 +13,9 @@ from datetime import datetime, timedelta, date
 from itertools import product
 
 # ==========================================
-# 0. 初始化與靜態快取
+# 0. 初始化與高性能快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v36.3 UNLOCKED", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v37.0 TURBO", page_icon="🎯", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -36,34 +36,30 @@ def get_hubs():
 
 CI_HUBS, ALL_CITIES, IDX_TPE, IDX_PRG, IDX_FRA = get_hubs()
 
+# Secrets 讀取
 try:
     API_KEY = st.secrets["BOOKING_API_KEY"]
 except KeyError:
-    st.error("🚨 缺少 API KEY (請確認 Secrets 設定)")
+    st.error("🚨 缺少 API KEY (請在 Secrets 設定 BOOKING_API_KEY)")
     st.stop()
 
-# Email Secrets
-SENDER = st.secrets.get("EMAIL_SENDER", "")
-PWD = st.secrets.get("EMAIL_PASSWORD", "")
-RECEIVER = st.secrets.get("EMAIL_RECEIVER", "")
+S_SENDER = st.secrets.get("EMAIL_SENDER", "")
+S_PWD = st.secrets.get("EMAIL_PASSWORD", "")
+S_RECEIVER = st.secrets.get("EMAIL_RECEIVER", "")
 
+# 狀態初始化
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 if "run_id" not in st.session_state: st.session_state.run_id = None
 if "ref_price" not in st.session_state: st.session_state.ref_price = 200000
 
-# 🛡️ 排雷三：日期安全解析，防止單一日期引發崩潰
+# ==========================================
+# 1. 核心工具函數
+# ==========================================
 def get_safe_dates(d_input):
     if isinstance(d_input, (list, tuple)):
-        if len(d_input) == 2: return d_input[0], d_input[1]
+        if len(d_input) >= 2: return d_input[0], d_input[1]
         if len(d_input) == 1: return d_input[0], d_input[0]
     return d_input, d_input
-
-# ==========================================
-# 1. Email 邏輯模組 (規則判定)
-# ==========================================
-def generate_table_html(res, ref):
-    rows = "".join([f"<tr><td>{r['total']:,}</td><td>{ref-r['total']:,}</td><td>{r['h1']}➔{r['h4']}</td><td>{r['d1']}/{r['d4']}</td><td>{' | '.join(r['legs'])}</td></tr>" for r in res[:100]])
-    return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;'><thead><tr style='background:#333;color:#fff;'><th>價格</th><th>獲利</th><th>路線</th><th>日期</th><th>航班</th></tr></thead><tbody>{rows}</tbody></table>"
 
 def generate_matrix_html(res, ref, title):
     d1_dates = sorted(list(set(r['d1'] for r in res)))
@@ -89,31 +85,38 @@ def generate_matrix_html(res, ref, title):
     h.append("</table>")
     return "".join(h)
 
-def send_smart_email(res, ref, target_str, is_range):
-    if not SENDER or not PWD or not res: return
+def send_detailed_email(res, ref, target_str, is_range):
+    if not S_SENDER or not S_PWD or not S_RECEIVER: return
     msg = MIMEMultipart()
-    msg['Subject'] = f"✈️ 航班獵殺報：{target_str} (最低 {res[0]['total']:,})"
+    msg['From'], msg['To'] = S_SENDER, S_RECEIVER
+    msg['Subject'] = f"✈️ 獵殺報告：{target_str} (最低 {res[0]['total']:,} TWD)"
     
     if not is_range:
-        body = f"<h2>單一日期搜尋結果</h2>{generate_table_html(res, ref)}"
+        # 單一日期：直接寄出明細表格
+        df = pd.DataFrame([{
+            "總價": f"{r['total']:,}", "獲利": f"{ref-r['total']:,}", "路線": f"{r['h1']}➔{r['h4']}", "航班": " | ".join(r['legs'])
+        } for r in res[:100]])
+        body = f"<h2>單一日期精確搜尋結果</h2>{df.to_html(index=False)}"
     else:
+        # 日期區間：寄出熱力矩陣
         body = f"<h2>日期區間熱力圖分析</h2>{generate_matrix_html(res, ref, '全球最優組合')}"
         routes = sorted(list(set(f"{r['h1']}➔{r['h4']}" for r in res)))
-        for route in routes[:5]:
+        for route in routes[:8]: # 顯示前8組熱門站點組合
             route_data = [r for r in res if f"{r['h1']}➔{r['h4']}" == route]
-            body += f"<hr>{generate_matrix_html(route_data, ref, f'站點：{route}')}"
+            body += f"<hr>{generate_matrix_html(route_data, ref, f'站點分析：{route}')}"
             
     msg.attach(MIMEText(f"<html><body>{body}</body></html>", 'html', 'utf-8'))
     try:
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
-            s.starttls(); s.login(SENDER, PWD); s.send_message(msg)
-    except Exception:
-        pass 
+            s.starttls(); s.login(S_SENDER, S_PWD); s.send_message(msg)
+        st.toast("✅ Email 已成功寄出", icon="📧")
+    except Exception as e:
+        st.error(f"🚨 Email 寄送失敗: {str(e)}")
 
 # ==========================================
-# 2. 異步核心 (智慧剪枝)
+# 2. 異步核心引擎 (智慧偵查兵版本)
 # ==========================================
-async def fetch_task(client, sem, task_data, rid):
+async def fetch_api(client, sem, task_data, rid):
     if st.session_state.run_id != rid: return None
     legs, cabin, h1, h4, d1, d4 = task_data
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
@@ -122,7 +125,7 @@ async def fetch_task(client, sem, task_data, rid):
         for _ in range(2):
             if st.session_state.run_id != rid: return None
             try:
-                res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=18.0)
+                res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=20.0)
                 if res.status_code == 200:
                     raw = res.json()
                     valid = []
@@ -136,23 +139,21 @@ async def fetch_task(client, sem, task_data, rid):
                         if is_ci and len(l_sum) == len(legs):
                             valid.append({"total": p, "legs": l_sum, "h1": h1[:3], "h4": h4[:3], "d1": d1, "d4": d4})
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
-                elif res.status_code == 429: await asyncio.sleep(1 + random.random())
-            except Exception:
-                pass 
+                elif res.status_code == 429: await asyncio.sleep(1.5 + random.random())
+            except Exception: pass
         return None
 
 # ==========================================
-# 3. UI 選單
+# 3. UI 介面 (排雷：東南亞不閃退)
 # ==========================================
+st.markdown(f"<div style='padding:10px; background:rgba(0,230,118,0.05); border-radius:8px; border:1px solid #00e676; margin-bottom:15px;'>🎯 <b>對標基準：</b> {st.session_state.ref_price:,} TWD</div>", unsafe_allow_html=True)
+
 with st.sidebar:
     st.header("⚙️ 獵殺控制台")
     workers = st.slider("併發上限 (RPS調整)", 20, 100, 80)
-    pruning_on = st.checkbox("🧠 啟動智慧剪枝 (Phase 1)", value=True, help="先偵查外站價格，剔除垃圾組合，速度快 3 倍")
-    email_on = st.checkbox("📧 寄送獵殺報告", value=True)
-    if st.button("🛑 緊急停止", type="primary"): 
-        st.session_state.run_id = None; st.rerun()
-
-st.markdown(f"<div style='padding:10px; background:rgba(0,230,118,0.05); border-radius:8px; border:1px solid #00e676; margin-bottom:15px;'>🎯 <b>對標基準：</b> {st.session_state.ref_price:,} TWD</div>", unsafe_allow_html=True)
+    email_on = st.checkbox("📧 完成後發送報告", value=True)
+    if st.button("🛑 強制重置/停止", type="primary"):
+        st.session_state.run_id = None; st.session_state.valid_offers = []; st.rerun()
 
 trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
 c1, c2 = st.columns(2)
@@ -167,28 +168,23 @@ else:
 
 with st.container():
     st.markdown("---")
-    sync = st.checkbox("👯 D4 同步 D1", value=True)
+    sync = st.checkbox("👯 D4 同步 D1 選擇", value=True)
     cr1, cr4 = st.columns(2)
     with cr1:
-        regs = st.multiselect("區域過濾", list(CI_HUBS.keys()))
-        if regs:
-            flt = [f"{c} ({n})" for r in regs for c, n in CI_HUBS[r].items()]
-            # 🛡️ 排雷一：動態 Key 綁定，強制 Streamlit 生成新選單，保證 Default 絕對生效！
-            d1_h = st.multiselect("📍 D1 起點", options=flt, default=flt, key=f"d1_{'-'.join(regs)}")
-        else:
-            d1_h = st.multiselect("📍 D1 起點", options=ALL_CITIES, key="d1_all")
-        d1_r = st.date_input("D1 日期範圍", value=(date(2026, 6, 10),))
+        regs = st.multiselect("區域快速過濾", list(CI_HUBS.keys()))
+        # 🛡️ 排雷三：動態 Key 與 邏輯鎖定，保證選區域不閃退
+        flt_options = [f"{c} ({n})" for r in regs for c, n in CI_HUBS[r].items()] if regs else ALL_CITIES
+        d1_h = st.multiselect("📍 D1 起點站", options=flt_options, default=flt_options if regs else None, key=f"d1_select_{hash(tuple(regs))}")
+        d1_r = st.date_input("D1 日期 (單日或範圍)", value=(date(2026, 6, 10),))
     with cr4:
-        d4_h = d1_h if sync else st.multiselect("📍 D4 終點", ALL_CITIES, key="d4_all")
-        d4_r = st.date_input("D4 日期範圍", value=(date(2026, 6, 26),))
+        d4_h = d1_h if sync else st.multiselect("📍 D4 終點站", ALL_CITIES, key="d4_manual")
+        d4_r = st.date_input("D4 日期 (單日或範圍)", value=(date(2026, 6, 26),))
 
 # ==========================================
-# 4. 執行大腦
+# 4. 獵殺執行大腦
 # ==========================================
 async def start_hunt():
     rid = str(uuid.uuid4()); st.session_state.run_id = rid
-    
-    # 🛡️ 排雷三：安全解析日期，避免單一日期報錯
     d1_s, d1_e = get_safe_dates(d1_r)
     d4_s, d4_e = get_safe_dates(d4_r)
     d1_list = [d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days + 1)]
@@ -206,56 +202,58 @@ async def start_hunt():
                      {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                 tasks.append((l, "BUSINESS", h1r, h4r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
-    if not tasks: 
-        st.warning("⚠️ 任務量為 0，請檢查日期順序或站點。")
-        return
-    
+    if not tasks: st.warning("⚠️ 任務量為 0，請檢查日期順序。"); return
+
     bar = st.progress(0); status = st.empty(); final_res = []
     limits = httpx.Limits(max_keepalive_connections=100, max_connections=200)
     
-    async with httpx.AsyncClient(timeout=25.0, limits=limits) as client:
-        ref_legs = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
-                    {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")}]
-        ref_res = await fetch_task(client, asyncio.Semaphore(1), (ref_legs, "BUSINESS", "", "", "", ""), rid)
+    async with httpx.AsyncClient(timeout=30.0, limits=limits) as client:
+        # Step 0: 校準對標價
+        status.info("🎯 正在獲取核心直飛市場基準價...")
+        ref_l = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
+                 {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")}]
+        ref_res = await fetch_api(client, asyncio.Semaphore(1), (ref_l, "BUSINESS", "", "", "", ""), rid)
         ref_val = ref_res['total'] if ref_res else 200000
         st.session_state.ref_price = ref_val
 
+        # Step 1: 正式獵殺 (採用流式非阻塞)
         sem = asyncio.Semaphore(workers)
         start_t = time.time()
-        coros = [fetch_task(client, sem, t, rid) for t in tasks]
+        coros = [fetch_api(client, sem, t, rid) for t in tasks]
+        
         for i, coro in enumerate(asyncio.as_completed(coros)):
-            if st.session_state.run_id != rid: return # 使用者強制中斷
+            if st.session_state.run_id != rid: return
             r = await coro
             if r and (ref_val - r['total'] >= 0): final_res.append(r)
             if i % 10 == 0 or i == len(tasks)-1:
-                rps = (i+1)/(time.time()-start_t) if time.time() > start_t else 0
-                bar.progress((i+1)/len(tasks), text=f"⚡ 進度: {i+1}/{len(tasks)} | 時速: {rps:.1f} RPS | 獲取: {len(final_res)}")
-                
+                elapsed = time.time()-start_t
+                rps = (i+1)/elapsed if elapsed > 0 else 0
+                bar.progress((i+1)/len(tasks), text=f"⚡ 獵殺中: {i+1}/{len(tasks)} | 速時: {rps:.1f} RPS | 鎖定: {len(final_res)}")
+
     st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
+    
+    # Step 2: Email 分流寄送 (排雷：邏輯與錯誤捕捉)
     if email_on and st.session_state.valid_offers:
-        status.success("📧 獵殺完畢，正在生成 Email...")
-        send_smart_email(st.session_state.valid_offers, ref_val, f"{d2o}➔{d2d}", is_range)
+        status.success("📧 獵殺完成！正在發送 Email 報告...")
+        send_detailed_email(st.session_state.valid_offers, ref_val, f"{d2o}➔{d2d}", is_range)
+    
     st.session_state.run_id = None; st.rerun()
 
-# 🛡️ 排雷二：徹底拔除 disabled 屬性！按鈕永遠不會反灰！
-if st.button("🚀 啟動極速獵殺", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v37 旗艦版)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
 # ==========================================
-# 5. 戰果展示 (DataFrame + Matrix)
+# 5. 網頁戰果展示
 # ==========================================
 if st.session_state.valid_offers:
     st.markdown("---")
-    tabs = st.tabs(["🏆 獲利排行", "📊 全域熱力矩陣"])
-    with tabs[0]:
+    t1, t2 = st.tabs(["🏆 獲利榜單", "📊 數據矩陣"])
+    with t1:
         df = pd.DataFrame([{
-            "總價 (TWD)": f"{r['total']:,}",
-            "價差": f"{st.session_state.ref_price-r['total']:,}",
-            "外站組合": f"{r['h1']} / {r['h4']}",
-            "日期組合": f"{r['d1']}~{r['d4']}",
-            "航班明細": " | ".join(r['legs'])
+            "總價 (TWD)": f"{r['total']:,}", "獲利": f"{st.session_state.ref_price-r['total']:,}",
+            "外站組合": f"{r['h1']}➔{r['h4']}", "日期": f"{r['d1']}~{r['d4']}", "航班": " | ".join(r['legs'])
         } for r in st.session_state.valid_offers])
         st.dataframe(df, use_container_width=True, hide_index=True)
-    with tabs[1]:
-        st.markdown(generate_matrix_html(st.session_state.valid_offers, st.session_state.ref_price, "全球最優組合"), unsafe_allow_html=True)
+    with t2:
+        st.markdown(generate_matrix_html(st.session_state.valid_offers, st.session_state.ref_price, "全球最優組合矩陣"), unsafe_allow_html=True)
