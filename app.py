@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v38.8 ULTIMATE", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v38.9 ULTIMATE", page_icon="🎯", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -53,6 +53,8 @@ if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 if "run_id" not in st.session_state: st.session_state.run_id = None
 if "ref_price" not in st.session_state: st.session_state.ref_price = 200000
 if "perf_stats" not in st.session_state: st.session_state.perf_stats = {"time": 0, "dps": 0}
+if "api_key_dead" not in st.session_state: st.session_state.api_key_dead = False
+if "quota_exceeded" not in st.session_state: st.session_state.quota_exceeded = False
 
 # ==========================================
 # 1. 核心工具函數 (含中文名稱優化)
@@ -122,7 +124,7 @@ def send_detailed_email(res, ref, target_str, is_range, elapsed, dps):
         print(f"Email failed: {e}")
 
 # ==========================================
-# 2. 異步核心引擎 (🛡️ 排雷大一統：無限制 + 5次退避 + 50s超時)
+# 2. 異步核心引擎 (🛡️ 排雷警報：捕捉超限與封鎖)
 # ==========================================
 async def fetch_api(client, sem, task_data, rid):
     if st.session_state.run_id != rid: return None
@@ -140,7 +142,6 @@ async def fetch_api(client, sem, task_data, rid):
                     valid = []
                     for o in raw.get('data', {}).get('flightOffers', []):
                         l_sum = []
-                        # 徹底無限制：不再檢查 is_ci 或航段長度，只要有票就收
                         for seg in o.get('segments', []):
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
@@ -151,7 +152,14 @@ async def fetch_api(client, sem, task_data, rid):
                         p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
                         valid.append({"total": p, "legs": l_sum, "h1": h1[:3], "h4": h4[:3], "d1": d1, "d4": d4})
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
+                elif res.status_code in [401, 403]:
+                    st.session_state.api_key_dead = True # 金鑰失效或被封鎖
+                    return None
                 elif res.status_code == 429: 
+                    # 判斷是單純限流，還是額度真用光了
+                    if "exceeded" in res.text.lower() or "quota" in res.text.lower() or "limit" in res.text.lower():
+                        st.session_state.quota_exceeded = True
+                        return None
                     await asyncio.sleep((1.5 ** attempt) + random.uniform(0.5, 1.5))
             except Exception: 
                 await asyncio.sleep(2.0)
@@ -208,6 +216,8 @@ with st.container():
 # 4. 獵殺執行大腦
 # ==========================================
 async def start_hunt():
+    st.session_state.api_key_dead = False
+    st.session_state.quota_exceeded = False
     rid = str(uuid.uuid4()); st.session_state.run_id = rid
     d1_s, d1_e = get_safe_dates(d1_r)
     d4_s, d4_e = get_safe_dates(d4_r)
@@ -223,7 +233,6 @@ async def start_hunt():
         h1, h4 = h1r.split(" ")[0], h4r.split(" ")[0]
         for d1, d4 in product(d1_list, d4_list):
             if d1 <= d2_s and d4 >= d3_s:
-                # 🛡️ 排雷三確保：.AIRPORT 後綴完整保留
                 l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
                      {"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_s.strftime("%Y-%m-%d")},
                      {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_s.strftime("%Y-%m-%d")},
@@ -239,10 +248,16 @@ async def start_hunt():
         ref_val = manual_ref
         if auto_ref:
             status.info("🎯 正在獲取核心直飛市場基準價...")
-            # 🛡️ 排雷三確保：對標價 .AIRPORT 後綴完整保留
             ref_l = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_s.strftime("%Y-%m-%d")},
                      {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_s.strftime("%Y-%m-%d")}]
             ref_res = await fetch_api(client, asyncio.Semaphore(1), (ref_l, cab_map[cab], "", "", "", ""), rid)
+            
+            # 🛡️ 致命錯誤攔截點：如果是因為沒額度導致獲取基準價失敗，直接拉警報！
+            if st.session_state.api_key_dead or st.session_state.quota_exceeded:
+                status.error("🚨 致命錯誤：API 金鑰無效，或「本月免費額度(500次)已徹底耗盡」。請至 RapidAPI 更換新的 API KEY！")
+                st.session_state.run_id = None
+                return
+                
             if ref_res: ref_val = ref_res['total']; st.session_state.ref_price = ref_val
 
         sem = asyncio.Semaphore(workers)
@@ -253,7 +268,12 @@ async def start_hunt():
             if st.session_state.run_id != rid: return
             r = await coro
             
-            # 視透視模式決定是否保留結果
+            # 🛡️ 執行中攔截：如果半路沒額度了，立刻停止並報警
+            if st.session_state.api_key_dead or st.session_state.quota_exceeded:
+                status.error("🚨 任務中斷：API 免費額度已耗盡，請更換新的 API KEY！")
+                st.session_state.run_id = None
+                return
+
             if r and (show_all or (ref_val - r['total'] >= 0)): final_res.append(r)
             
             if i % 10 == 0 or i == len(tasks)-1:
@@ -273,7 +293,7 @@ async def start_hunt():
     
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺 (v38.8 大一統版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v38.9 API 警報版)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
