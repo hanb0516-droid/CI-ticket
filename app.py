@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v39.0 BASELINE", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v39.1 TRACKER", page_icon="🔍", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -55,7 +55,7 @@ if "perf_stats" not in st.session_state: st.session_state.perf_stats = {"time": 
 if "debug_logs" not in st.session_state: st.session_state.debug_logs = set()
 
 # ==========================================
-# 1. 核心工具函數 (v38.4 基準)
+# 1. 核心工具函數
 # ==========================================
 def get_safe_dates(d_input):
     if isinstance(d_input, (list, tuple)):
@@ -122,11 +122,15 @@ def send_detailed_email(res, ref, target_str, is_range, elapsed, dps):
         print(f"Email failed: {e}")
 
 # ==========================================
-# 2. 異步核心引擎 (🛡️ 診斷探針掛載)
+# 2. 異步核心引擎 (60秒破壁 + 精準日誌)
 # ==========================================
 async def fetch_api(client, sem, task_data, rid):
     if st.session_state.run_id != rid: return None
     legs, cabin, h1, h4, d1, d4 = task_data
+    
+    # 提取航線字串，方便印出日誌
+    route_str = f"{h1[:3]}-{json.loads(legs)[1]['fromId'][:3]}-{json.loads(legs)[2]['fromId'][:3]}-{h4[:3]}"
+    
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     
@@ -134,21 +138,21 @@ async def fetch_api(client, sem, task_data, rid):
         for attempt in range(3):
             if st.session_state.run_id != rid: return None
             try:
-                res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=30.0)
+                # 🚀 60.0 秒極限耐心，專治 JFK 與 SIN 複雜轉機
+                res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=60.0)
                 
                 if res.status_code == 200:
                     raw = res.json()
-                    data = raw.get('data') or {}
-                    offers = data.get('flightOffers') or []
+                    offers = raw.get('data', {}).get('flightOffers', [])
                     
                     if not offers:
-                        st.session_state.debug_logs.add(f"⚠️ API回傳 200，但找不到航班 (訊息: {raw.get('message', '無')})")
+                        st.session_state.debug_logs.add(f"⚠️ 找不到航班: {route_str} (API回傳200，但無符合 '{cabin}' 艙等之組合)")
                         return None
 
                     valid = []
                     for o in offers:
                         l_sum = []
-                        # 徹底解除航空與段數限制，照單全收
+                        # 徹底解除航空與段數限制
                         for seg in o.get('segments', []):
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
@@ -162,13 +166,17 @@ async def fetch_api(client, sem, task_data, rid):
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 
                 elif res.status_code == 429:
-                    st.session_state.debug_logs.add(f"⛔ HTTP 429: 請求太頻繁或額度耗盡")
+                    st.session_state.debug_logs.add(f"⛔ HTTP 429: {route_str} 請求太頻繁，退避重試中...")
                     await asyncio.sleep(1.5 + random.random())
                 else:
-                    st.session_state.debug_logs.add(f"❌ HTTP {res.status_code}: {res.text[:100]}")
+                    st.session_state.debug_logs.add(f"❌ HTTP {res.status_code}: {route_str} 發生錯誤")
                     return None
             except Exception as e:
-                st.session_state.debug_logs.add(f"💥 系統異常: {type(e).__name__} - {str(e)}")
+                # 精準捕捉 Timeout
+                if "ReadTimeout" in str(type(e)):
+                    st.session_state.debug_logs.add(f"💥 超時放棄: {route_str} (超過60秒仍算不出來)")
+                else:
+                    st.session_state.debug_logs.add(f"💥 系統異常: {route_str} ({type(e).__name__})")
                 await asyncio.sleep(1.0)
         return None
 
@@ -223,7 +231,7 @@ with st.container():
 # 4. 獵殺執行大腦
 # ==========================================
 async def start_hunt():
-    st.session_state.debug_logs.clear() # 每次啟動清空日誌
+    st.session_state.debug_logs.clear()
     rid = str(uuid.uuid4()); st.session_state.run_id = rid
     d1_s, d1_e = get_safe_dates(d1_r)
     d4_s, d4_e = get_safe_dates(d4_r)
@@ -250,7 +258,7 @@ async def start_hunt():
     bar = st.progress(0); status = st.empty(); final_res = []
     limits = httpx.Limits(max_keepalive_connections=150, max_connections=250)
     
-    async with httpx.AsyncClient(timeout=30.0, limits=limits) as client:
+    async with httpx.AsyncClient(timeout=60.0, limits=limits) as client:
         ref_val = manual_ref
         if auto_ref:
             status.info("🎯 正在獲取核心直飛市場基準價...")
@@ -284,7 +292,7 @@ async def start_hunt():
     
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺 (基準除錯版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
@@ -324,10 +332,10 @@ if st.session_state.valid_offers:
                 route_data = [r for r in st.session_state.valid_offers if r['h1'] == h1_c and r['h4'] == h4_c]
                 st.markdown(generate_matrix_html(route_data, st.session_state.ref_price, f"組合分析：{get_name(h1_c)} ➔ {get_name(h4_c)}"), unsafe_allow_html=True)
 
-# 🛡️ 真言偵錯面板：只要有錯誤，就會在這裡無所遁形
+# 🛡️ 真言偵錯面板：列出所有 Timeout 或是被 API 拒絕的詳細航線
 if st.session_state.debug_logs:
     st.markdown("---")
-    with st.expander("🔍 開發者偵錯日誌 (展開查看 API 真實狀態)", expanded=not st.session_state.valid_offers):
-        st.warning("以下是系統在背景遭遇的真實狀況：")
-        for log in list(st.session_state.debug_logs)[:20]: # 最多顯示 20 條不同錯誤
+    with st.expander("🔍 開發者偵錯日誌 (展開查看 Booking API 真實狀態)", expanded=not st.session_state.valid_offers):
+        st.warning("以下為被 Booking.com 拒絕或發生超時的航線紀錄：")
+        for log in list(st.session_state.debug_logs)[:30]: 
             st.code(log)
