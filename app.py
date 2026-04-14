@@ -9,7 +9,7 @@ from itertools import product
 # ==========================================
 # 0. 全局初始化 & 旗艦風格
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | ULTRA v30", page_icon="💎", layout="wide")
+st.set_page_config(page_title="Flight Actuary | ULTRA v30.1", page_icon="💎", layout="wide")
 
 st.markdown("""
 <style>
@@ -44,7 +44,8 @@ CI_GLOBAL_HUBS = {
     "北美洲": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "JFK": "紐約", "YVR": "溫哥華"},
     "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
 }
-ALL_CITIES = [f"{c} ({n})" for r, cities in CI_GLOBAL_HUBS.items() for c, name in cities.items()]
+# 🛡️ 排雷 1：修正變數名稱 Typo ({n} -> {name})
+ALL_CITIES = [f"{c} ({name})" for r, cities in CI_GLOBAL_HUBS.items() for c, name in cities.items()]
 
 # ==========================================
 # 1. 異步核心 (鑽石級穩定版)
@@ -84,7 +85,7 @@ async def fetch_task(client, sem, task_data):
 # ==========================================
 # 2. UI 設計
 # ==========================================
-st.markdown('<p class="custom-title">⚡ ULTRA v30 DIAMOND RADAR</p>', unsafe_allow_html=True)
+st.markdown('<p class="custom-title">⚡ ULTRA v30.1 DIAMOND RADAR</p>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ 配置")
@@ -113,6 +114,7 @@ with c1:
 with c2:
     st.subheader("📡 獵殺範圍")
     d1_regs = st.multiselect("區域", list(CI_GLOBAL_HUBS.keys()))
+    # 這裡的 {n} 是合法的，因為迴圈變數是 c, n
     d1_hubs = st.multiselect("外站站點", [f"{c} ({n})" for r in d1_regs for c, n in CI_GLOBAL_HUBS[r].items()] if d1_regs else ALL_CITIES)
     d1_range = st.date_input("D1 範圍", value=(date(2026, 6, 10), date(2026, 6, 10)))
     d4_range = st.date_input("D4 範圍", value=(date(2026, 6, 26), date(2026, 6, 26)))
@@ -139,12 +141,16 @@ async def start_hunt():
                             {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                     raw_tasks.append((legs, cabin_opt[cabin], h1_r, h4_r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
-    if not raw_tasks: st.error("❌ 任務量為 0，請檢查日期順序。"); return
+    if not raw_tasks: 
+        st.error("❌ 任務量為 0，請檢查日期順序。")
+        return # 這裡 return 會被外層的 finally 接住，按鈕安全解鎖
 
     status_area = st.empty()
     prog_bar = st.progress(0)
     
-    async with httpx.AsyncClient(timeout=40.0) as client:
+    # 🛡️ 排雷 3：加大 limits，避免高併發連線池耗盡
+    limits = httpx.Limits(max_keepalive_connections=200, max_connections=200)
+    async with httpx.AsyncClient(timeout=40.0, limits=limits) as client:
         # 校準直飛
         status_area.info("🎯 正在獲取市場基準價...")
         d_legs = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
@@ -158,7 +164,6 @@ async def start_hunt():
         results = []
         start_time = time.time()
         
-        # 🛡️ 排雷優化：分批處理任務，避免進度條每筆刷新導致 UI 沒反應
         chunk_size = 10 
         for i in range(0, len(raw_tasks), chunk_size):
             chunk = raw_tasks[i : i + chunk_size]
@@ -170,26 +175,28 @@ async def start_hunt():
                     r['ref'] = ref_val
                     results.append(r)
             
-            # 每 chunk_size 更新一次 UI
-            done = i + chunk_size
+            done = min(i + chunk_size, len(raw_tasks))
             elapsed = time.time() - start_time
-            rps = done / elapsed
-            prog_bar.progress(min(done / len(raw_tasks), 1.0))
+            rps = done / elapsed if elapsed > 0 else 0
+            prog_bar.progress(done / len(raw_tasks))
             status_area.markdown(f"""
             <div class="status-card">
-                <b>進度:</b> {min(done, len(raw_tasks))} / {len(raw_tasks)} | 
+                <b>進度:</b> {done} / {len(raw_tasks)} | 
                 <b>時速:</b> {rps:.1f} 筆/秒 | 
                 <b>捕捉到:</b> {len(results)} 組
             </div>
             """, unsafe_allow_html=True)
 
         st.session_state.valid_offers = results
-        st.session_state.is_hunting = False
         st.rerun()
 
+# 🛡️ 排雷 2：使用 try...finally 確保按鈕不會永久假死
 if st.button("🔥 啟動鋼鐵獵殺", disabled=st.session_state.is_hunting):
     st.session_state.is_hunting = True
-    asyncio.run(start_hunt())
+    try:
+        asyncio.run(start_hunt())
+    finally:
+        st.session_state.is_hunting = False
 
 # ==========================================
 # 📊 矩陣展示
@@ -200,7 +207,8 @@ def render_matrix(res_list, ref):
     d4_dates = sorted(list(set(r['d4'] for r in res_list)))
     matrix = {}
     prices = [r['total'] for r in res_list]
-    min_p, max_p = min(prices), max(prices)
+    # 🛡️ 排雷 5：確保 prices 有值才計算 min/max
+    min_p, max_p = min(prices) if prices else 0, max(prices) if prices else 0
     for r in res_list:
         key = (r['d1'], r['d4'])
         if key not in matrix or r['total'] < matrix[key]['total']: matrix[key] = r
