@@ -9,7 +9,7 @@ from itertools import product
 # ==========================================
 # 0. 全局初始化 & 極簡風格
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | ULTRA v30.8", page_icon="💎", layout="wide")
+st.set_page_config(page_title="Flight Actuary | ULTRA v30.9", page_icon="💎", layout="wide")
 
 st.markdown("""
 <style>
@@ -40,7 +40,7 @@ CI_GLOBAL_HUBS = {
     "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
     "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
     "歐洲": {"FRA": "法蘭克福", "AMS": "阿姆斯特丹", "LHR": "倫敦", "VIE": "維也納", "FCO": "羅馬", "PRG": "布拉格"},
-    "北美洲": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "JFK": "紐約", "YVR": "溫哥運"},
+    "北美洲": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "JFK": "紐約", "YVR": "溫哥華"},
     "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
 }
 
@@ -90,7 +90,7 @@ async def fetch_task(client, sem, task_data):
 # ==========================================
 # 2. UI 設計
 # ==========================================
-st.markdown(f'<div class="quota-box">💎 <b>極速解鎖版：</b> RPS 流式掃描 | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">💎 <b>環境相容版：</b> 已解決 http2 依賴問題 | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ 引擎配置")
@@ -102,7 +102,6 @@ with st.sidebar:
     auto_ref = st.checkbox("自動對標直飛價", value=True)
     manual_ref = st.number_input("手動預算基準", value=200000)
     
-    # 🛡️ 排雷 1：緊急重置按鈕
     if st.button("🚨 強制解鎖引擎"):
         st.session_state.is_hunting = False
         st.rerun()
@@ -153,7 +152,6 @@ with st.container():
 # 3. 獵殺邏輯
 # ==========================================
 async def start_hunt():
-    # 🛡️ 排雷 2：強化日期與任務檢查
     d1_s, d1_e = (d1_range[0], d1_range[-1]) if isinstance(d1_range, (list, tuple)) else (d1_range, d1_range)
     d4_s, d4_e = (d4_range[0], d4_range[-1]) if isinstance(d4_range, (list, tuple)) else (d4_range, d4_range)
     d1_list = [d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days + 1)]
@@ -173,14 +171,15 @@ async def start_hunt():
                     raw_tasks.append((l, cabin_opt[cabin], h1_r, h4_r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
     if not raw_tasks: 
-        st.warning("⚠️ 找不到符合條件的組合。請確認 D1 日期早於 D2，且 D4 日期晚於 D3。")
+        st.warning("⚠️ 找不到符合條件的組合。")
         return
 
     status_area = st.empty()
     prog_bar = st.progress(0)
     
+    # 🛡️ 關鍵排雷 1：移除 http2=True，使用標準 HTTP/1.1
     limits = httpx.Limits(max_keepalive_connections=100, max_connections=200)
-    async with httpx.AsyncClient(timeout=30.0, limits=limits, http2=True) as client:
+    async with httpx.AsyncClient(timeout=30.0, limits=limits) as client:
         ref_val = manual_ref
         if auto_ref:
             status_area.info("🎯 核心校準中...")
@@ -205,14 +204,14 @@ async def start_hunt():
                 done = i + 1
                 rps = done / (curr - start_time) if curr > start_time else 0
                 prog_bar.progress(done / len(raw_tasks))
-                status_area.markdown(f'<div class="status-card"><b>進度:</b> {done}/{len(raw_tasks)} | <b>時速:</b> {rps:.1f} RPS | <b>已獲取:</b> {len(results)}</div>', unsafe_allow_html=True)
+                status_area.markdown(f'<div class="status-card"><b>進度:</b> {done}/{len(raw_tasks)} | <b>時速:</b> {rps:.1f} RPS | <b>鎖定神票:</b> {len(results)}</div>', unsafe_allow_html=True)
                 last_ui = curr
 
         st.session_state.valid_offers = results
         st.rerun()
 
-# 🛡️ 排雷 5：按鈕邏輯強化
 if st.button("🔥 啟動極速獵殺", disabled=st.session_state.is_hunting, use_container_width=True):
+    st.session_state.valid_offers.clear()
     st.session_state.is_hunting = True
     try:
         asyncio.run(start_hunt())
@@ -261,7 +260,7 @@ if st.session_state.valid_offers:
         for r in res[:20]:
             save = st.session_state.ref_price - r['total']
             with st.expander(f"💰 {r['total']:,} | {'省' if save>=0 else '貴'} {abs(save):,} ({r['h1'][:3]} ➔ {r['h4'][:3]})"):
-                st.write(f"日期: {r['d1']} / {r['d4']} | 航班: {' | '.join(r['legs'])}")
+                st.write(f"航班: {' | '.join(r['legs'])}")
     for i, route in enumerate(routes):
         with tabs[i+1]:
             st.markdown(render_matrix([r for r in res if f"{r['h1']} ➔ {r['h4']}" == route], st.session_state.ref_price), unsafe_allow_html=True)
