@@ -5,13 +5,17 @@ import json
 import time
 import random
 import uuid
+import smtplib
+import pandas as pd
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, date
 from itertools import product
 
 # ==========================================
 # 0. 全局初始化 & 基準風格
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v34.0 HYBRID", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v35.0 FLAGSHIP", page_icon="✈️", layout="wide")
 
 st.markdown("""
 <style>
@@ -26,6 +30,11 @@ try:
     API_KEY = st.secrets["BOOKING_API_KEY"]
 except KeyError:
     st.error("🚨 缺少 API KEY"); st.stop()
+
+# Email Secrets 防呆讀取
+SENDER = st.secrets.get("EMAIL_SENDER")
+PWD = st.secrets.get("EMAIL_PASSWORD")
+RECEIVER = st.secrets.get("EMAIL_RECEIVER")
 
 # 狀態管理
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
@@ -49,19 +58,67 @@ def get_city_idx(code):
     return 0
 
 # ==========================================
-# 1. 任務執行引擎 (帶有防禦機制的 Asyncio)
+# 1. Email 渲染與寄送模組 (排雷一)
+# ==========================================
+def render_matrix_html(res_list, ref, title_str):
+    if not res_list: return "<p>無符合條件的航班。</p>"
+    d1_dates = sorted(list(set(r['d1'] for r in res_list)))
+    d4_dates = sorted(list(set(r['d4'] for r in res_list)))
+    matrix = {}
+    prices = [r['total'] for r in res_list]
+    min_p, max_p = min(prices) if prices else 0, max(prices) if prices else 0
+    for r in res_list:
+        key = (r['d1'], r['d4'])
+        if key not in matrix or r['total'] < matrix[key]['total']: matrix[key] = r
+
+    html = f"""<div style="background-color: #ffffff; color: #333; padding: 12px; border-radius: 8px; font-family: sans-serif;">
+        <h3 style="margin: 0 0 10px 0;">{title_str}</h3>
+        <table border="1" style="border-collapse: collapse; text-align: center; width: 100%; font-size: 12px;">
+            <tr style="background-color: #333; color: white;"><th>D4↘\\D1➡</th>"""
+    for d1 in d1_dates: html += f"<th>{d1[5:]}</th>"
+    html += "</tr>"
+    for d4 in d4_dates:
+        html += f"<tr><td style='background-color: #f2f2f2; font-weight: bold;'>{d4[5:]}</td>"
+        for d1 in d1_dates:
+            rec = matrix.get((d1, d4))
+            if rec:
+                save = ref - rec['total']
+                alpha = 0.8 if max_p <= min_p else 0.8 - 0.7 * ((rec['total'] - min_p) / (max_p - min_p))
+                bg = f"rgba(0, 230, 118, {alpha:.2f})" if save >= 0 else "rgba(255, 182, 193, 0.4)"
+                save_text = f"<br><span style='color: {'#d32f2f' if save>=0 else '#1976d2'};'>{'省' if save>=0 else '貴'} {abs(save):,}</span>"
+                html += f"<td style='background-color: {bg}; padding: 6px;'><b>{rec['total']:,}</b>{save_text}<br><span style='font-size: 9px; color: #555;'>{rec['h1']}➔{rec['h4']}</span></td>"
+            else: html += "<td style='color: #ccc;'>-</td>"
+        html += "</tr>"
+    return html + "</table></div>"
+
+def send_email_report(res_list, ref, target_str):
+    if not SENDER or not PWD or not RECEIVER or not res_list: return
+    html_content = render_matrix_html(res_list, ref, f"✈️ 航班獵殺報告 ({target_str}) | 對標直飛: {ref:,}")
+    msg = MIMEMultipart()
+    msg['From'] = SENDER
+    msg['To'] = RECEIVER
+    msg['Subject'] = f"✈️ [Flight Radar] 發現 {len(res_list)} 組神票！最低價 {res_list[0]['total']:,} TWD"
+    msg.attach(MIMEText(f"<html><body>{html_content}</body></html>", 'html', 'utf-8'))
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as s:
+            s.starttls()
+            s.login(SENDER, PWD)
+            s.send_message(msg)
+    except Exception as e:
+        print(f"Email failed: {e}")
+
+# ==========================================
+# 2. 異步核心引擎
 # ==========================================
 async def fetch_task_async(client, sem, task_data, current_run_id):
-    # 🛡️ 排雷二：殭屍檢測，如果 ID 不符立刻退出
     if st.session_state.run_id != current_run_id: return None
-    
     legs, cabin, h1, h4, d1, d4 = task_data
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     
     async with sem:
         for attempt in range(3):
-            if st.session_state.run_id != current_run_id: return None # 二次檢測
+            if st.session_state.run_id != current_run_id: return None
             try:
                 res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=18.0)
                 if res.status_code == 200:
@@ -79,30 +136,33 @@ async def fetch_task_async(client, sem, task_data, current_run_id):
                             valid.append({"total": p, "legs": l_sum, "h1": h1[:3], "h4": h4[:3], "d1": d1, "d4": d4})
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 elif res.status_code == 429:
-                    # 🛡️ 排雷一：隨機抖動 (Jitter)，破解 429 死亡螺旋
                     await asyncio.sleep(1.0 + random.uniform(0.5, 2.0))
             except:
                 await asyncio.sleep(0.5)
         return None
 
 # ==========================================
-# 2. UI 佈局 (保持上一版的零卡頓結構)
+# 3. UI 佈局
 # ==========================================
-st.markdown(f'<div class="quota-box">🚀 <b>v34.0 終極引擎：</b> 破冰提速 & 防殭屍進程 | 🎯 基準：{st.session_state.ref_price:,}</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">🚀 <b>v35.0 旗艦版：</b> Email 模組回歸 & 極限 RPS | 🎯 基準：{st.session_state.ref_price:,}</div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ 引擎控制")
     cab_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
     cab = st.selectbox("艙等", list(cab_map.keys()))
-    workers = st.slider("異步併發上限", 20, 80, 40)
+    workers = st.slider("異步併發上限 (建議80)", 20, 100, 80)
     show_all = st.checkbox("👁️ 透視模式", value=False)
     auto_ref = st.checkbox("自動對標直飛", value=True)
     manual_ref = st.number_input("手動基準", value=200000)
     
     st.markdown("---")
-    # 🛡️ 急停開關
+    st.subheader("📬 通知設定")
+    email_on = st.checkbox("📧 完成後發送 Email", value=True, disabled=not bool(SENDER))
+    if not SENDER: st.caption("⚠️ Secrets 尚未設定 Email 帳密")
+    
+    st.markdown("---")
     if st.button("🛑 停止 / 重置引擎", type="primary"):
-        st.session_state.run_id = None # 瞬間賜死所有背景工人
+        st.session_state.run_id = None
         st.session_state.is_hunting = False
         st.session_state.valid_offers = []
         st.rerun()
@@ -138,21 +198,19 @@ with st.container():
         if regs:
             flt = [f"{c} ({n})" for r in regs for c, n in CI_GLOBAL_HUBS[r].items()]
             d1_h = st.multiselect("📍 D1 起點", options=flt, default=flt)
-        else:
-            d1_h = st.multiselect("📍 D1 起點", options=ALL_CITIES)
+        else: d1_h = st.multiselect("📍 D1 起點", options=ALL_CITIES)
         d1_r = st.date_input("D1 範圍", value=(date(2026, 6, 10), date(2026, 6, 10)))
     with cr4:
         d4_h = d1_h if sync else st.multiselect("📍 D4 終點", ALL_CITIES)
         d4_r = st.date_input("D4 範圍", value=(date(2026, 6, 26), date(2026, 6, 26)))
 
 # ==========================================
-# 3. 異步主控台
+# 4. 異步主控台
 # ==========================================
 async def start_async_hunt():
     d1_s, d1_e = (d1_r[0], d1_r[-1]) if isinstance(d1_r, (list, tuple)) else (d1_r, d1_r)
     d4_s, d4_e = (d4_r[0], d4_r[-1]) if isinstance(d4_r, (list, tuple)) else (d4_r, d4_r)
     tasks = []
-    
     for h1r, h4r in product(d1_h, d4_h):
         h1, h4 = h1r.split(" ")[0], h4r.split(" ")[0]
         for d1, d4 in product([d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days + 1)], 
@@ -164,11 +222,8 @@ async def start_async_hunt():
                      {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                 tasks.append((l, cab_map[cab], h1r, h4r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
-    if not tasks:
-        st.warning("⚠️ 任務量為 0，請檢查日期或站點。")
-        return
+    if not tasks: st.warning("⚠️ 任務量為 0"); return
 
-    # 生成本次任務專屬 ID
     my_run_id = str(uuid.uuid4())
     st.session_state.run_id = my_run_id
 
@@ -189,30 +244,33 @@ async def start_async_hunt():
         sem = asyncio.Semaphore(workers)
         start_t = time.time()
         last_ui_update = time.time()
-        
         coros = [fetch_task_async(client, sem, t, my_run_id) for t in tasks]
         
         for i, coro in enumerate(asyncio.as_completed(coros)):
-            # 任務執行中，檢查是否已被使用者按下停止
             if st.session_state.run_id != my_run_id:
-                status_area.warning("🚨 任務已由使用者強制中止！")
-                return # 直接切斷迴圈
+                status_area.warning("🚨 任務已中止！"); return
 
             r = await coro
             if r and (show_all or (ref_val - r['total'] >= 0)):
                 r['ref'] = ref_val
                 res_list.append(r)
             
-            # 非阻塞更新 UI (每秒最多 1 次)
             now = time.time()
             if now - last_ui_update > 1.0 or i == len(tasks) - 1:
                 rps = (i + 1) / (now - start_t) if now > start_t else 0
                 bar.progress((i + 1) / len(tasks))
-                status_area.markdown(f'<div style="color:#00e676; font-weight:bold;">⚡ 進度: {i+1}/{len(tasks)} | 時速: {rps:.1f} RPS | 尋獲神票: {len(res_list)}</div>', unsafe_allow_html=True)
+                status_area.markdown(f'<div style="color:#00e676; font-weight:bold;">⚡ 進度: {i+1}/{len(tasks)} | 引擎滿載極速: {rps:.1f} RPS | 尋獲: {len(res_list)}</div>', unsafe_allow_html=True)
                 last_ui_update = now
 
-    # 🛡️ 排雷四：結果瘦身，防止 UI 渲染癱瘓
     st.session_state.valid_offers = sorted(res_list, key=lambda x: x['total'])[:1000]
+    
+    # 🛡️ 排雷三：完工後才寄 Email，確保資源不打架
+    if st.session_state.run_id == my_run_id and email_on and SENDER and res_list:
+        status_area.info("📧 正在生成並發送 Email 報告...")
+        target_str = f"{d2o}➔{d2d} | {d3o}➔{d3d}"
+        send_email_report(st.session_state.valid_offers, ref_val, target_str)
+        st.toast('✅ 獵殺報告已發送至您的信箱！', icon='📧')
+
     st.session_state.is_hunting = False
     st.session_state.run_id = None
     st.rerun()
@@ -220,23 +278,25 @@ async def start_async_hunt():
 if st.button("🚀 啟動異步極速獵殺", disabled=st.session_state.is_hunting, use_container_width=True):
     st.session_state.valid_offers = []
     st.session_state.is_hunting = True
-    try:
-        asyncio.run(start_async_hunt())
-    except Exception as e:
-        st.error(f"系統異常: {e}")
-        st.session_state.is_hunting = False
+    try: asyncio.run(start_async_hunt())
+    except Exception as e: st.error(f"系統異常: {e}"); st.session_state.is_hunting = False
 
 # ==========================================
-# 4. 戰果展示
+# 5. 戰果展示 (原生 DataFrame)
 # ==========================================
 if st.session_state.valid_offers:
     st.markdown("---")
     res = st.session_state.valid_offers
+    st.write(f"🏆 成功鎖定 **{len(res)}** 組神票 (對標價: {st.session_state.ref_price:,})")
     
-    st.write(f"🏆 成功鎖定 **{len(res)}** 組最佳神票 (對標價: {st.session_state.ref_price:,})")
-    
-    # 簡單列表展示 (最高效，不卡頓)
-    for r in res[:50]:
+    df_data = []
+    for r in res[:50]: # 保留最頂級的 50 組供 UI 快速滑動
         diff = st.session_state.ref_price - r['total']
-        with st.expander(f"💰 {r['total']:,} | {'省' if diff>=0 else '貴'} {abs(diff):,} ({r['h1']}➔{r['h4']})"):
-            st.write(f"日期: {r['d1']} ~ {r['d4']} | 航班: {' | '.join(r['legs'])}")
+        df_data.append({
+            "總價 (TWD)": f"💰 {r['total']:,}",
+            "價差": f"{'🔥 省' if diff>=0 else '📉 貴'} {abs(diff):,}",
+            "去程外站 (D1)": f"{r['h1']} ({r['d1']})",
+            "回程外站 (D4)": f"{r['h4']} ({r['d4']})",
+            "航班號碼": " | ".join(r['legs'])
+        })
+    st.dataframe(pd.DataFrame(df_data), use_container_width=True, hide_index=True)
