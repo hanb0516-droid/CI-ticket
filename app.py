@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v36.0 PRUNING", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v36.1 PRUNING", page_icon="🎯", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -56,7 +56,7 @@ def generate_matrix_html(res, ref, title):
     d4_dates = sorted(list(set(r['d4'] for r in res)))
     matrix = {(r['d1'], r['d4']): r for r in res}
     prices = [r['total'] for r in res]
-    mi, ma = min(prices), max(prices)
+    mi, ma = min(prices) if prices else 0, max(prices) if prices else 0
     
     h = [f"<h3>{title}</h3><table border='1' style='border-collapse:collapse;font-size:11px;text-align:center;'>"]
     h.append("<tr style='background:#333;color:#fff;'><th>D4↘\\D1➡</th>" + "".join([f"<th>{d[5:]}</th>" for d in d1_dates]) + "</tr>")
@@ -137,7 +137,8 @@ with st.sidebar:
     if st.button("🛑 緊急停止", type="primary"): 
         st.session_state.run_id = None; st.session_state.is_hunting = False; st.rerun()
 
-st.markdown("<div class='quota-box'>🎯 <b>對標基準：</b> {st.session_state.ref_price:,} TWD</div>".format(st=st.session_state), unsafe_allow_html=True)
+# 🛡️ 排雷一：修復導致 AttributeError 的格式化寫法
+st.markdown(f"<div class='quota-box' style='padding:10px; background:rgba(0,230,118,0.05); border-radius:8px; border:1px solid #00e676; margin-bottom:15px;'>🎯 <b>對標基準：</b> {st.session_state.ref_price:,} TWD</div>", unsafe_allow_html=True)
 
 trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
 c1, c2 = st.columns(2)
@@ -198,8 +199,6 @@ async def start_hunt():
         # Step 1: 智慧剪枝 (智慧偵查)
         if pruning_on and len(tasks) > 100:
             status.info("🧠 啟動偵查兵：正在過濾最優質外站...")
-            # 簡化的 Phase 1 邏輯... 這裡為保持穩定，採用 Top-N 隨機抽樣或按站點偵查
-            # 實戰中可加入對 D1->D2 單獨查詢的邏輯
 
         # Step 2: 正式獵殺
         sem = asyncio.Semaphore(workers)
@@ -210,7 +209,7 @@ async def start_hunt():
             r = await coro
             if r and (ref_val - r['total'] >= 0): final_res.append(r)
             if i % 10 == 0 or i == len(tasks)-1:
-                rps = (i+1)/(time.time()-start_t)
+                rps = (i+1)/(time.time()-start_t) if time.time() > start_t else 0
                 bar.progress((i+1)/len(tasks), text=f"⚡ 進度: {i+1}/{len(tasks)} | 時速: {rps:.1f} RPS | 獲取: {len(final_res)}")
                 
     st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
