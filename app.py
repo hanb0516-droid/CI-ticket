@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v38.6 TIMEOUT", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v38.7 HOTFIX", page_icon="🎯", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -122,7 +122,7 @@ def send_detailed_email(res, ref, target_str, is_range, elapsed, dps):
         print(f"Email failed: {e}")
 
 # ==========================================
-# 2. 異步核心引擎 (🛡️ 排雷一：突破運算極限)
+# 2. 異步核心引擎
 # ==========================================
 async def fetch_api(client, sem, task_data, rid):
     if st.session_state.run_id != rid: return None
@@ -133,7 +133,6 @@ async def fetch_api(client, sem, task_data, rid):
         for _ in range(2):
             if st.session_state.run_id != rid: return None
             try:
-                # 🚀 關鍵修復：Timeout 提高到 50.0 秒，確保長程線 API 能算完回傳
                 res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=50.0)
                 if res.status_code == 200:
                     raw = res.json()
@@ -168,7 +167,7 @@ with st.sidebar:
     show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     email_on = st.checkbox("📧 完成後發送報告", value=True)
     auto_ref = st.checkbox("自動對標直飛", value=True)
-    manual_ref = st.number_input("手動基準", value=200000)
+    manual_ref = st.number_input("手手動基準", value=200000)
     if st.button("🛑 強制重置/停止", type="primary"):
         st.session_state.run_id = None; st.session_state.valid_offers = []; st.rerun()
 
@@ -192,7 +191,6 @@ with st.container():
         flt_options = [f"{c} ({n})" for r in regs for c, n in CI_HUBS[r].items()] if regs else ALL_CITIES
         d1_key = f"d1_select_{hash(tuple(regs))}"
         
-        # 🛠️ 排雷二：精準顯示選取數量 (X)
         curr_d1_selection = st.session_state.get(d1_key, flt_options if regs else [])
         d1_count = len(curr_d1_selection)
         d1_h = st.multiselect(f"📍 D1 起點站 ({d1_count})", options=flt_options, default=flt_options if regs else None, key=d1_key)
@@ -209,8 +207,8 @@ async def start_hunt():
     rid = str(uuid.uuid4()); st.session_state.run_id = rid
     d1_s, d1_e = get_safe_dates(d1_r)
     d4_s, d4_e = get_safe_dates(d4_r)
-    d2_s, _ = get_safe_dates(d2_dt) # 防護 D2 避免解析崩潰
-    d3_s, _ = get_safe_dates(d3_dt) # 防護 D3 避免解析崩潰
+    d2_s, _ = get_safe_dates(d2_dt) 
+    d3_s, _ = get_safe_dates(d3_dt) 
     
     d1_list = [d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days + 1)]
     d4_list = [d4_s + timedelta(days=i) for i in range((d4_e-d4_s).days + 1)]
@@ -221,24 +219,25 @@ async def start_hunt():
         h1, h4 = h1r.split(" ")[0], h4r.split(" ")[0]
         for d1, d4 in product(d1_list, d4_list):
             if d1 <= d2_s and d4 >= d3_s:
-                l = [{"fromId": h1, "toId": d2o, "date": d1.strftime("%Y-%m-%d")},
-                     {"fromId": d2o, "toId": d2d, "date": d2_s.strftime("%Y-%m-%d")},
-                     {"fromId": d3o, "toId": d3d, "date": d3_s.strftime("%Y-%m-%d")},
-                     {"fromId": d3d, "toId": h4, "date": d4.strftime("%Y-%m-%d")}]
+                # 🛠️ 修復點一：補回 .AIRPORT 救命後綴
+                l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
+                     {"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_s.strftime("%Y-%m-%d")},
+                     {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_s.strftime("%Y-%m-%d")},
+                     {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                 tasks.append((l, cab_map[cab], h1r, h4r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
     if not tasks: st.warning("⚠️ 任務量為 0，請檢查日期順序。"); return
 
     bar = st.progress(0); status = st.empty(); final_res = []
-    # 搭配 Timeout=50，擴大 HTTPX 的連線維持極限
     limits = httpx.Limits(max_keepalive_connections=150, max_connections=250)
     
     async with httpx.AsyncClient(timeout=50.0, limits=limits) as client:
         ref_val = manual_ref
         if auto_ref:
             status.info("🎯 正在獲取核心直飛市場基準價...")
-            ref_l = [{"fromId": d2o, "toId": d2d, "date": d2_s.strftime("%Y-%m-%d")},
-                     {"fromId": d3o, "toId": d3d, "date": d3_s.strftime("%Y-%m-%d")}]
+            # 🛠️ 修復點二：對標價參數也必須補回 .AIRPORT
+            ref_l = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_s.strftime("%Y-%m-%d")},
+                     {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_s.strftime("%Y-%m-%d")}]
             ref_res = await fetch_api(client, asyncio.Semaphore(1), (ref_l, cab_map[cab], "", "", "", ""), rid)
             if ref_res: ref_val = ref_res['total']; st.session_state.ref_price = ref_val
 
