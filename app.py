@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v36.2 PRUNING", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v36.3 UNLOCKED", page_icon="🎯", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -36,7 +36,6 @@ def get_hubs():
 
 CI_HUBS, ALL_CITIES, IDX_TPE, IDX_PRG, IDX_FRA = get_hubs()
 
-# 🛡️ 排雷一：精準攔截 KeyError，不再吞噬 st.stop()
 try:
     API_KEY = st.secrets["BOOKING_API_KEY"]
 except KeyError:
@@ -49,9 +48,15 @@ PWD = st.secrets.get("EMAIL_PASSWORD", "")
 RECEIVER = st.secrets.get("EMAIL_RECEIVER", "")
 
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
-if "is_hunting" not in st.session_state: st.session_state.is_hunting = False
 if "run_id" not in st.session_state: st.session_state.run_id = None
 if "ref_price" not in st.session_state: st.session_state.ref_price = 200000
+
+# 🛡️ 排雷三：日期安全解析，防止單一日期引發崩潰
+def get_safe_dates(d_input):
+    if isinstance(d_input, (list, tuple)):
+        if len(d_input) == 2: return d_input[0], d_input[1]
+        if len(d_input) == 1: return d_input[0], d_input[0]
+    return d_input, d_input
 
 # ==========================================
 # 1. Email 邏輯模組 (規則判定)
@@ -103,7 +108,7 @@ def send_smart_email(res, ref, target_str, is_range):
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
             s.starttls(); s.login(SENDER, PWD); s.send_message(msg)
     except Exception:
-        pass # 🛡️ 排雷二：安全捕捉例外
+        pass 
 
 # ==========================================
 # 2. 異步核心 (智慧剪枝)
@@ -133,7 +138,7 @@ async def fetch_task(client, sem, task_data, rid):
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 elif res.status_code == 429: await asyncio.sleep(1 + random.random())
             except Exception:
-                pass # 🛡️ 排雷二：安全捕捉例外
+                pass 
         return None
 
 # ==========================================
@@ -145,9 +150,9 @@ with st.sidebar:
     pruning_on = st.checkbox("🧠 啟動智慧剪枝 (Phase 1)", value=True, help="先偵查外站價格，剔除垃圾組合，速度快 3 倍")
     email_on = st.checkbox("📧 寄送獵殺報告", value=True)
     if st.button("🛑 緊急停止", type="primary"): 
-        st.session_state.run_id = None; st.session_state.is_hunting = False; st.rerun()
+        st.session_state.run_id = None; st.rerun()
 
-st.markdown("<div style='padding:10px; background:rgba(0,230,118,0.05); border-radius:8px; border:1px solid #00e676; margin-bottom:15px;'>🎯 <b>對標基準：</b> {ref:,} TWD</div>".format(ref=st.session_state.ref_price), unsafe_allow_html=True)
+st.markdown(f"<div style='padding:10px; background:rgba(0,230,118,0.05); border-radius:8px; border:1px solid #00e676; margin-bottom:15px;'>🎯 <b>對標基準：</b> {st.session_state.ref_price:,} TWD</div>", unsafe_allow_html=True)
 
 trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
 c1, c2 = st.columns(2)
@@ -162,14 +167,19 @@ else:
 
 with st.container():
     st.markdown("---")
-    sync = st.checkbox("D4 同步 D1", value=True)
+    sync = st.checkbox("👯 D4 同步 D1", value=True)
     cr1, cr4 = st.columns(2)
     with cr1:
         regs = st.multiselect("區域過濾", list(CI_HUBS.keys()))
-        d1_h = st.multiselect("📍 D1 起點", options=[f"{c} ({n})" for r in regs for c, n in CI_HUBS[r].items()] if regs else ALL_CITIES)
+        if regs:
+            flt = [f"{c} ({n})" for r in regs for c, n in CI_HUBS[r].items()]
+            # 🛡️ 排雷一：動態 Key 綁定，強制 Streamlit 生成新選單，保證 Default 絕對生效！
+            d1_h = st.multiselect("📍 D1 起點", options=flt, default=flt, key=f"d1_{'-'.join(regs)}")
+        else:
+            d1_h = st.multiselect("📍 D1 起點", options=ALL_CITIES, key="d1_all")
         d1_r = st.date_input("D1 日期範圍", value=(date(2026, 6, 10),))
     with cr4:
-        d4_h = d1_h if sync else st.multiselect("📍 D4 終點", ALL_CITIES)
+        d4_h = d1_h if sync else st.multiselect("📍 D4 終點", ALL_CITIES, key="d4_all")
         d4_r = st.date_input("D4 日期範圍", value=(date(2026, 6, 26),))
 
 # ==========================================
@@ -177,8 +187,12 @@ with st.container():
 # ==========================================
 async def start_hunt():
     rid = str(uuid.uuid4()); st.session_state.run_id = rid
-    d1_list = [d1_r[0] + timedelta(days=i) for i in range((d1_r[-1]-d1_r[0]).days + 1)] if isinstance(d1_r, (list, tuple)) else [d1_r]
-    d4_list = [d4_r[0] + timedelta(days=i) for i in range((d4_r[-1]-d4_r[0]).days + 1)] if isinstance(d4_r, (list, tuple)) else [d4_r]
+    
+    # 🛡️ 排雷三：安全解析日期，避免單一日期報錯
+    d1_s, d1_e = get_safe_dates(d1_r)
+    d4_s, d4_e = get_safe_dates(d4_r)
+    d1_list = [d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days + 1)]
+    d4_list = [d4_s + timedelta(days=i) for i in range((d4_e-d4_s).days + 1)]
     is_range = len(d1_list) > 1 or len(d4_list) > 1
 
     tasks = []
@@ -192,7 +206,9 @@ async def start_hunt():
                      {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                 tasks.append((l, "BUSINESS", h1r, h4r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
-    if not tasks: return
+    if not tasks: 
+        st.warning("⚠️ 任務量為 0，請檢查日期順序或站點。")
+        return
     
     bar = st.progress(0); status = st.empty(); final_res = []
     limits = httpx.Limits(max_keepalive_connections=100, max_connections=200)
@@ -204,14 +220,11 @@ async def start_hunt():
         ref_val = ref_res['total'] if ref_res else 200000
         st.session_state.ref_price = ref_val
 
-        if pruning_on and len(tasks) > 100:
-            status.info("🧠 啟動偵查兵：正在過濾最優質外站...")
-
         sem = asyncio.Semaphore(workers)
         start_t = time.time()
         coros = [fetch_task(client, sem, t, rid) for t in tasks]
         for i, coro in enumerate(asyncio.as_completed(coros)):
-            if st.session_state.run_id != rid: return
+            if st.session_state.run_id != rid: return # 使用者強制中斷
             r = await coro
             if r and (ref_val - r['total'] >= 0): final_res.append(r)
             if i % 10 == 0 or i == len(tasks)-1:
@@ -222,10 +235,11 @@ async def start_hunt():
     if email_on and st.session_state.valid_offers:
         status.success("📧 獵殺完畢，正在生成 Email...")
         send_smart_email(st.session_state.valid_offers, ref_val, f"{d2o}➔{d2d}", is_range)
-    st.session_state.is_hunting = False; st.session_state.run_id = None; st.rerun()
+    st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺", disabled=st.session_state.is_hunting, use_container_width=True):
-    st.session_state.valid_offers = []; st.session_state.is_hunting = True
+# 🛡️ 排雷二：徹底拔除 disabled 屬性！按鈕永遠不會反灰！
+if st.button("🚀 啟動極速獵殺", use_container_width=True):
+    st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
 # ==========================================
