@@ -9,7 +9,7 @@ from itertools import product
 # ==========================================
 # 0. 全局初始化 & 極簡風格
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | ULTRA v30.4", page_icon="💎", layout="wide")
+st.set_page_config(page_title="Flight Actuary | ULTRA v30.5", page_icon="💎", layout="wide")
 
 st.markdown("""
 <style>
@@ -43,7 +43,19 @@ CI_GLOBAL_HUBS = {
     "北美洲": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "JFK": "紐約", "YVR": "溫哥華"},
     "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
 }
-ALL_CITIES = [f"{c} ({n})" for r, cities in CI_GLOBAL_HUBS.items() for c, n in cities.items()]
+
+# 🛡️ 排雷 3：變數命名潔癖，明確使用 code, name
+ALL_CITIES = [f"{code} ({name})" for r, cities in CI_GLOBAL_HUBS.items() for code, name in cities.items()]
+
+# 🛡️ 排雷 1：動態取得索引，避免寫死 index 導致陣列越界
+def get_city_idx(target_code):
+    for i, city_str in enumerate(ALL_CITIES):
+        if city_str.startswith(target_code): return i
+    return 0
+
+idx_tpe = get_city_idx("TPE")
+idx_prg = get_city_idx("PRG")
+idx_fra = get_city_idx("FRA")
 
 # ==========================================
 # 1. 異步核心 (鑽石級穩定版)
@@ -81,9 +93,9 @@ async def fetch_task(client, sem, task_data):
         return None
 
 # ==========================================
-# 2. UI 設計 (已拔除標題，極簡化)
+# 2. UI 設計
 # ==========================================
-# 畫面第一行直接顯示狀態列
+# 第一行直接顯示狀態列 (無干擾)
 st.markdown(f'<div class="quota-box">💎 <b>全功能連動模式：</b> 支援開口行程 | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.sidebar:
@@ -103,20 +115,23 @@ with st.container():
     c1, c2 = st.columns(2)
     if trip_mode == "來回":
         with c1:
-            b_org = st.selectbox("起點", ALL_CITIES, index=0)
+            b_org = st.selectbox("起點", ALL_CITIES, index=idx_tpe)
             d2_dt = st.date_input("D2 去程日期", value=date(2026, 6, 11))
         with c2:
-            b_dst = st.selectbox("終點", ALL_CITIES, index=5)
+            # 🛡️ 排雷 2：來回模式預設目的地為 PRG
+            b_dst = st.selectbox("終點", ALL_CITIES, index=idx_prg)
             d3_dt = st.date_input("D3 回程日期", value=date(2026, 6, 25))
         d2o, d2d, d3o, d3d = b_org.split(" ")[0], b_dst.split(" ")[0], b_dst.split(" ")[0], b_org.split(" ")[0]
     else:
         with c1:
-            d2os = st.selectbox("D2 起點", ALL_CITIES, index=0)
-            d2ds = st.selectbox("D2 終點", ALL_CITIES, index=5)
+            d2os = st.selectbox("D2 起點", ALL_CITIES, index=idx_tpe)
+            # 🛡️ 排雷 2：多點進出 D2 目的地為 PRG
+            d2ds = st.selectbox("D2 終點", ALL_CITIES, index=idx_prg)
             d2_dt = st.date_input("D2 出發日期", value=date(2026, 6, 11))
         with c2:
-            d3os = st.selectbox("D3 起點", ALL_CITIES, index=32)
-            d3ds = st.selectbox("D3 終點", ALL_CITIES, index=0)
+            # 🛡️ 排雷 2：多點進出 D3 出發地為 FRA
+            d3os = st.selectbox("D3 起點", ALL_CITIES, index=idx_fra)
+            d3ds = st.selectbox("D3 終點", ALL_CITIES, index=idx_tpe)
             d3_dt = st.date_input("D3 回程日期", value=date(2026, 6, 25))
         d2o, d2d, d3o, d3d = d2os.split(" ")[0], d2ds.split(" ")[0], d3os.split(" ")[0], d3ds.split(" ")[0]
 
