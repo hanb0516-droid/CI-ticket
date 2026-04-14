@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v38.7 HOTFIX", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v38.8 ULTIMATE", page_icon="🎯", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -122,15 +122,16 @@ def send_detailed_email(res, ref, target_str, is_range, elapsed, dps):
         print(f"Email failed: {e}")
 
 # ==========================================
-# 2. 異步核心引擎
+# 2. 異步核心引擎 (🛡️ 排雷大一統：無限制 + 5次退避 + 50s超時)
 # ==========================================
 async def fetch_api(client, sem, task_data, rid):
     if st.session_state.run_id != rid: return None
     legs, cabin, h1, h4, d1, d4 = task_data
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
+    
     async with sem:
-        for _ in range(2):
+        for attempt in range(5):
             if st.session_state.run_id != rid: return None
             try:
                 res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=50.0)
@@ -139,6 +140,7 @@ async def fetch_api(client, sem, task_data, rid):
                     valid = []
                     for o in raw.get('data', {}).get('flightOffers', []):
                         l_sum = []
+                        # 徹底無限制：不再檢查 is_ci 或航段長度，只要有票就收
                         for seg in o.get('segments', []):
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
@@ -149,8 +151,10 @@ async def fetch_api(client, sem, task_data, rid):
                         p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
                         valid.append({"total": p, "legs": l_sum, "h1": h1[:3], "h4": h4[:3], "d1": d1, "d4": d4})
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
-                elif res.status_code == 429: await asyncio.sleep(1.5 + random.random())
-            except Exception: pass
+                elif res.status_code == 429: 
+                    await asyncio.sleep((1.5 ** attempt) + random.uniform(0.5, 1.5))
+            except Exception: 
+                await asyncio.sleep(2.0)
         return None
 
 # ==========================================
@@ -167,7 +171,7 @@ with st.sidebar:
     show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     email_on = st.checkbox("📧 完成後發送報告", value=True)
     auto_ref = st.checkbox("自動對標直飛", value=True)
-    manual_ref = st.number_input("手手動基準", value=200000)
+    manual_ref = st.number_input("手動基準", value=200000)
     if st.button("🛑 強制重置/停止", type="primary"):
         st.session_state.run_id = None; st.session_state.valid_offers = []; st.rerun()
 
@@ -219,7 +223,7 @@ async def start_hunt():
         h1, h4 = h1r.split(" ")[0], h4r.split(" ")[0]
         for d1, d4 in product(d1_list, d4_list):
             if d1 <= d2_s and d4 >= d3_s:
-                # 🛠️ 修復點一：補回 .AIRPORT 救命後綴
+                # 🛡️ 排雷三確保：.AIRPORT 後綴完整保留
                 l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
                      {"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_s.strftime("%Y-%m-%d")},
                      {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_s.strftime("%Y-%m-%d")},
@@ -235,7 +239,7 @@ async def start_hunt():
         ref_val = manual_ref
         if auto_ref:
             status.info("🎯 正在獲取核心直飛市場基準價...")
-            # 🛠️ 修復點二：對標價參數也必須補回 .AIRPORT
+            # 🛡️ 排雷三確保：對標價 .AIRPORT 後綴完整保留
             ref_l = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_s.strftime("%Y-%m-%d")},
                      {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_s.strftime("%Y-%m-%d")}]
             ref_res = await fetch_api(client, asyncio.Semaphore(1), (ref_l, cab_map[cab], "", "", "", ""), rid)
@@ -248,7 +252,10 @@ async def start_hunt():
         for i, coro in enumerate(asyncio.as_completed(coros)):
             if st.session_state.run_id != rid: return
             r = await coro
+            
+            # 視透視模式決定是否保留結果
             if r and (show_all or (ref_val - r['total'] >= 0)): final_res.append(r)
+            
             if i % 10 == 0 or i == len(tasks)-1:
                 elapsed_now = time.time() - total_start_time
                 rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
@@ -266,7 +273,7 @@ async def start_hunt():
     
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v38.8 大一統版)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
