@@ -290,4 +290,4 @@ if st.session_state.valid_offers:
         else:
             for route in routes:
                 route_data = [r for r in st.session_state.valid_offers if f"{r['h1']} ➔ {r['h4']}" == route]
-                st.markdown(generate_matrix_html(route_data, st.session_state.ref_price, f"組合分析：{route}"), unsafe_
+                st.markdown(generate_matrix_html(route_data, st.session_state.ref_price, f"組合分析：{route}"), unsafe_allow_html=True)
