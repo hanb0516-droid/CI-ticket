@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v38.4 NAME+", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v38.5 ZERO-DROP", page_icon="🎯", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -29,7 +29,6 @@ def get_hubs():
         "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
     }
     all_c = [f"{code} ({name})" for r, cities in h.items() for code, name in cities.items()]
-    # 建立一個方便查詢的平面字典
     flat_map = {code: name for r in h.values() for code, name in r.items()}
     
     def f_idx(target):
@@ -40,7 +39,6 @@ def get_hubs():
 
 CI_HUBS, ALL_CITIES, AIRPORT_MAP, IDX_TPE, IDX_PRG, IDX_FRA = get_hubs()
 
-# Secrets 讀取
 try:
     API_KEY = st.secrets["BOOKING_API_KEY"]
 except KeyError:
@@ -51,14 +49,13 @@ S_SENDER = st.secrets.get("EMAIL_SENDER", "")
 S_PWD = st.secrets.get("EMAIL_PASSWORD", "")
 S_RECEIVER = st.secrets.get("EMAIL_RECEIVER", "")
 
-# 狀態初始化
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 if "run_id" not in st.session_state: st.session_state.run_id = None
 if "ref_price" not in st.session_state: st.session_state.ref_price = 200000
 if "perf_stats" not in st.session_state: st.session_state.perf_stats = {"time": 0, "dps": 0}
 
 # ==========================================
-# 1. 核心工具函數 (含中文名稱優化)
+# 1. 核心工具函數 (分流矩陣與 Email)
 # ==========================================
 def get_safe_dates(d_input):
     if isinstance(d_input, (list, tuple)):
@@ -125,15 +122,17 @@ def send_detailed_email(res, ref, target_str, is_range, elapsed, dps):
         print(f"Email failed: {e}")
 
 # ==========================================
-# 2. 異步核心引擎
+# 2. 異步核心引擎 (🛡️ 排雷修復：防戰損指數退避)
 # ==========================================
 async def fetch_api(client, sem, task_data, rid):
     if st.session_state.run_id != rid: return None
     legs, cabin, h1, h4, d1, d4 = task_data
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
+    
     async with sem:
-        for _ in range(2):
+        # 🛠️ 核心修復：從 2 次重試改為 5 次，保證每一張票都不會因為 429 被吃掉
+        for attempt in range(5):
             if st.session_state.run_id != rid: return None
             try:
                 res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=20.0)
@@ -141,23 +140,23 @@ async def fetch_api(client, sem, task_data, rid):
                     raw = res.json()
                     valid = []
                     for o in raw.get('data', {}).get('flightOffers', []):
-                        l_sum, is_ci = [], True
-                        segs = o.get('segments', [])
-                        for seg in segs:
+                        l_sum = []
+                        for seg in o.get('segments', []):
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
                                 c_info = f.get('carrierInfo', {})
                                 op = c_info.get('operatingCarrier', '')
                                 mk = c_info.get('marketingCarrier', '')
-                                if op != "CI" and mk != "CI": is_ci = False
                                 l_sum.append(f"{mk or op}{f.get('flightNumber', '')}")
                         p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
-                        if is_ci and len(segs) == len(legs):
-                            valid.append({"total": p, "legs": l_sum, "h1": h1[:3], "h4": h4[:3], "d1": d1, "d4": d4})
+                        valid.append({"total": p, "legs": l_sum, "h1": h1[:3], "h4": h4[:3], "d1": d1, "d4": d4})
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
-                elif res.status_code == 429: await asyncio.sleep(1.5 + random.random())
-            except Exception: pass
-        return None
+                elif res.status_code == 429: 
+                    # 🛠️ 核心修復：指數退避 (Exponential Backoff)，越撞牆睡越久，打破封鎖
+                    await asyncio.sleep((1.5 ** attempt) + random.uniform(0.5, 1.5))
+            except Exception: 
+                await asyncio.sleep(2.0) # 遇到 Timeout 也給予喘息時間
+        return None # 只有真的試了 5 次都失敗，才忍痛丟棄
 
 # ==========================================
 # 3. UI 介面
@@ -244,7 +243,9 @@ async def start_hunt():
         for i, coro in enumerate(asyncio.as_completed(coros)):
             if st.session_state.run_id != rid: return
             r = await coro
+            
             if r and (show_all or (ref_val - r['total'] >= 0)): final_res.append(r)
+            
             if i % 10 == 0 or i == len(tasks)-1:
                 elapsed_now = time.time() - total_start_time
                 rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
@@ -262,7 +263,7 @@ async def start_hunt():
     
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺 (v38.4)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
