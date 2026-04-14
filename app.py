@@ -9,7 +9,7 @@ from itertools import product
 # ==========================================
 # 0. 全局初始化 & 極簡風格
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | ULTRA v30.6", page_icon="💎", layout="wide")
+st.set_page_config(page_title="Flight Actuary | ULTRA v30.7", page_icon="💎", layout="wide")
 
 st.markdown("""
 <style>
@@ -56,7 +56,7 @@ idx_prg = get_city_idx("PRG")
 idx_fra = get_city_idx("FRA")
 
 # ==========================================
-# 1. 異步核心 (鑽石級穩定版 - 未更動)
+# 1. 異步核心 (Ultra v30.7 流式優化)
 # ==========================================
 async def fetch_task(client, sem, task_data):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
@@ -64,16 +64,16 @@ async def fetch_task(client, sem, task_data):
     legs, cabin, h1, h4, d1, d4 = task_data
     
     async with sem:
-        for attempt in range(3):
+        for attempt in range(2): # 降低重試次數，以換取單次高吞吐量
             try:
                 res = await client.get(url, headers=headers, params={
                     "legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"
-                }, timeout=30.0)
+                }, timeout=22.0) # 🛡️ 排雷 2：縮短超時時間，避免工人卡死
+                
                 if res.status_code == 200:
                     data = res.json()
-                    offers = data.get('data', {}).get('flightOffers', [])
                     valid = []
-                    for o in offers:
+                    for o in data.get('data', {}).get('flightOffers', []):
                         l_sum, is_ci = [], True
                         for seg in o.get('segments', []):
                             f = seg.get('legs', [{}])[0].get('flightInfo', {})
@@ -85,22 +85,22 @@ async def fetch_task(client, sem, task_data):
                             valid.append({"total": p, "legs": l_sum, "h1": h1, "h4": h4, "d1": d1, "d4": d4})
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 elif res.status_code == 429:
-                    await asyncio.sleep(2 * (attempt + 1))
+                    await asyncio.sleep(2)
             except:
-                await asyncio.sleep(1)
+                pass
         return None
 
 # ==========================================
-# 2. UI 設計 
+# 2. UI 設計 (維持 v30.6 的聯動修正)
 # ==========================================
-st.markdown(f'<div class="quota-box">💎 <b>全功能連動模式：</b> 支援開口行程 | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">💎 <b>異步流式引擎版：</b> 解決長尾效應 | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("⚙️ 引擎配置")
     cabin_opt = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
     cabin = st.selectbox("艙等", list(cabin_opt.keys()))
     show_all = st.checkbox("👁️ 透視模式 (含賠錢票)", value=False)
-    concurrency = st.slider("併發數 (RPS)", 10, 40, 30)
+    concurrency = st.slider("併發壓力 (RPS)", 10, 50, 30)
     st.markdown("---")
     auto_ref = st.checkbox("自動對標直飛價", value=True)
     manual_ref = st.number_input("手動預算基準", value=200000)
@@ -108,7 +108,6 @@ with st.sidebar:
 with st.container():
     st.subheader("📌 核心行程 (D2 / D3)")
     trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
-    
     c1, c2 = st.columns(2)
     if trip_mode == "來回":
         with c1:
@@ -133,28 +132,23 @@ st.markdown("---")
 
 with st.container():
     st.subheader("📡 外站雷達 (D1 / D4)")
-    st.checkbox("👯 D4 自動帶入 D1 的選擇 (方便操作)", value=True, key="sync_ui")
-    st.checkbox("🔒 嚴格限制：D1/D4 必須同站點進出", value=False, key="strict_match")
-    
+    st.checkbox("👯 D4 自動帶入 D1", value=True, key="sync_ui")
+    st.checkbox("🔒 嚴格限制：同站進出", value=False, key="strict_match")
     cr1, cr4 = st.columns(2)
     with cr1:
-        # 🛡️ 排雷 1 & 2：精準連動邏輯修復
-        d1_regs = st.multiselect("D1 區域過濾", list(CI_GLOBAL_HUBS.keys()))
+        d1_regs = st.multiselect("區域過濾", list(CI_GLOBAL_HUBS.keys()))
         if d1_regs:
-            filtered_hubs = [f"{c} ({n})" for r in d1_regs for c, n in CI_GLOBAL_HUBS[r].items()]
-            d1_hubs = st.multiselect("📍 D1 起點站", options=filtered_hubs, default=filtered_hubs)
+            filtered = [f"{c} ({n})" for r in d1_regs for c, n in CI_GLOBAL_HUBS[r].items()]
+            d1_hubs = st.multiselect("📍 D1 起點", options=filtered, default=filtered)
         else:
-            d1_hubs = st.multiselect("📍 D1 起點站", options=ALL_CITIES)
-            
-        d1_range = st.date_input("📅 D1 日期範圍", value=(date(2026, 6, 10), date(2026, 6, 10)))
-        
+            d1_hubs = st.multiselect("📍 D1 起點", options=ALL_CITIES)
+        d1_range = st.date_input("D1 範圍", value=(date(2026, 6, 10), date(2026, 6, 10)))
     with cr4:
-        # 🛡️ 排雷 3：D4 完美同步
-        d4_hubs = d1_hubs if st.session_state.sync_ui else st.multiselect("📍 D4 終點站", ALL_CITIES)
-        d4_range = st.date_input("📅 D4 日期範圍", value=(date(2026, 6, 26), date(2026, 6, 26)))
+        d4_hubs = d1_hubs if st.session_state.sync_ui else st.multiselect("📍 D4 終點", ALL_CITIES)
+        d4_range = st.date_input("D4 範圍", value=(date(2026, 6, 26), date(2026, 6, 26)))
 
 # ==========================================
-# 3. 獵殺邏輯 (未更動)
+# 3. 獵殺邏輯 (🛡️ 排雷 1：流式非阻塞引擎)
 # ==========================================
 async def start_hunt():
     d1_s, d1_e = (d1_range[0], d1_range[-1]) if isinstance(d1_range, (list, tuple)) else (d1_range, d1_range)
@@ -169,72 +163,73 @@ async def start_hunt():
             h1, h4 = h1_r.split(" ")[0], h4_r.split(" ")[0]
             for d1, d4 in product(d1_list, d4_list):
                 if d1 <= d2_dt and d4 >= d3_dt:
-                    legs = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
-                            {"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
-                            {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")},
-                            {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
-                    raw_tasks.append((legs, cabin_opt[cabin], h1_r, h4_r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
+                    l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
+                         {"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
+                         {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")},
+                         {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
+                    raw_tasks.append((l, cabin_opt[cabin], h1_r, h4_r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
-    if not raw_tasks: 
-        st.error("❌ 任務量為 0，請檢查日期順序 (D1需早於D2，D4需晚於D3) 或是否未選擇外站。")
-        return
+    if not raw_tasks: st.error("❌ 任務量為 0"); return
 
     status_area = st.empty()
     prog_bar = st.progress(0)
     
-    limits = httpx.Limits(max_keepalive_connections=200, max_connections=200)
-    async with httpx.AsyncClient(timeout=40.0, limits=limits) as client:
+    # 強制使用 HTTP/2 並加大連線池
+    limits = httpx.Limits(max_keepalive_connections=100, max_connections=200)
+    async with httpx.AsyncClient(timeout=30.0, limits=limits, http2=True) as client:
         ref_val = manual_ref
         if auto_ref:
-            status_area.info("🎯 正在同步核心路徑市場直飛價...")
+            status_area.info("🎯 核心校準中...")
             d_legs = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
                       {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")}]
-            ref_res = await fetch_task(client, asyncio.Semaphore(1), (d_legs, cabin_opt[cabin], "", "", "", ""))
-            if ref_res: ref_val = ref_res['total']
-            st.session_state.ref_price = ref_val
+            res = await fetch_task(client, asyncio.Semaphore(1), (d_legs, cabin_opt[cabin], "", "", "", ""))
+            if res: ref_val = res['total']; st.session_state.ref_price = ref_val
 
+        # 🛡️ 排雷 1：使用流式併發，不等待 Chunk
         sem = asyncio.Semaphore(concurrency)
         results = []
         start_time = time.time()
+        last_ui_update = time.time()
         
-        chunk_size = 10 
-        for i in range(0, len(raw_tasks), chunk_size):
-            chunk = raw_tasks[i : i + chunk_size]
-            batch_tasks = [fetch_task(client, sem, t) for t in chunk]
-            batch_results = await asyncio.gather(*batch_tasks)
+        # 建立所有協程任務
+        coros = [fetch_task(client, sem, t) for t in raw_tasks]
+        
+        # 🛡️ 使用 as_completed 實現真正的「誰快誰先回」
+        for i, coro in enumerate(asyncio.as_completed(coros)):
+            res = await coro
+            if res and (show_all or (ref_val - res['total'] >= 0)):
+                res['ref'] = ref_val
+                results.append(res)
             
-            for r in batch_results:
-                if r and (show_all or (ref_val - r['total'] >= 0)):
-                    r['ref'] = ref_val
-                    results.append(r)
-            
-            done = min(i + chunk_size, len(raw_tasks))
-            elapsed = time.time() - start_time
-            rps = done / elapsed if elapsed > 0 else 0
-            prog_bar.progress(done / len(raw_tasks))
-            status_area.markdown(f"""
-            <div class="status-card">
-                <b>任務進度:</b> {done} / {len(raw_tasks)} | 
-                <b>引擎時速:</b> {rps:.1f} RPS | 
-                <b>鎖定神票:</b> {len(results)} 組
-            </div>
-            """, unsafe_allow_html=True)
+            # 🛡️ 排雷 3：每秒才更新一次 UI，大幅減少渲染損耗
+            curr_time = time.time()
+            if curr_time - last_ui_update > 1.0 or (i + 1) == len(raw_tasks):
+                done = i + 1
+                elapsed = curr_time - start_time
+                rps = done / elapsed if elapsed > 0 else 0
+                prog_bar.progress(done / len(raw_tasks))
+                status_area.markdown(f"""
+                <div class="status-card">
+                    <b>獵殺進度:</b> {done} / {len(raw_tasks)} | 
+                    <b>引擎時速:</b> <span style="color:#00e676; font-size:16px;">{rps:.1f} RPS</span> | 
+                    <b>已鎖定:</b> {len(results)} 組
+                </div>
+                """, unsafe_allow_html=True)
+                last_ui_update = curr_time
 
         st.session_state.valid_offers = results
         st.rerun()
 
-if st.button("🔥 啟動鋼鐵獵殺", disabled=st.session_state.is_hunting, use_container_width=True):
+if st.button("🔥 啟動極速獵殺", disabled=st.session_state.is_hunting, use_container_width=True):
     st.session_state.valid_offers.clear()
     st.session_state.is_hunting = True
     try:
         asyncio.run(start_hunt())
-    except Exception as e:
-        st.error(f"🚨 系統異常中斷: {e}")
     finally:
         st.session_state.is_hunting = False
 
 # ==========================================
-# 📊 矩陣展示 (未更動)
+# 📊 矩陣展示
 # ==========================================
 def render_matrix(res_list, ref):
     if not res_list: return ""
@@ -267,15 +262,12 @@ if st.session_state.valid_offers:
     res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
     routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in res)))
     tabs = st.tabs(["🏆 綜合最優"] + routes)
-    
     with tabs[0]:
         st.markdown(render_matrix(res, st.session_state.ref_price), unsafe_allow_html=True)
-        st.write("📋 詳細排行:")
-        for r in res[:30]:
+        for r in res[:20]:
             save = st.session_state.ref_price - r['total']
-            with st.expander(f"💰 {r['total']:,} | {'🔥 省' if save>=0 else '📉 貴'} {abs(save):,} ({r['h1'][:3]} {r['d1']} ➔ {r['h4'][:3]} {r['d4']})"):
+            with st.expander(f"💰 {r['total']:,} | {'省' if save>=0 else '貴'} {abs(save):,} ({r['h1'][:3]} ➔ {r['h4'][:3]})"):
                 st.write(f"航班: {' | '.join(r['legs'])}")
-                
     for i, route in enumerate(routes):
         with tabs[i+1]:
             st.markdown(render_matrix([r for r in res if f"{r['h1']} ➔ {r['h4']}" == route], st.session_state.ref_price), unsafe_allow_html=True)
