@@ -2,13 +2,8 @@ import streamlit as st
 import requests
 import json
 import time
-import os
-import pandas as pd
-import smtplib
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, date
 from itertools import product
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ==========================================
 # 0. UI 初始化與全局連線池
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | BUG FIXED", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Flight Actuary | FULL EDITION", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -40,12 +35,10 @@ st.markdown("""
 
 try:
     BOOKING_API_KEY = st.secrets["BOOKING_API_KEY"]
-    SENDER = st.secrets.get("EMAIL_SENDER")
-    PWD = st.secrets.get("EMAIL_PASSWORD")
-    RECEIVER = st.secrets.get("EMAIL_RECEIVER")
 except KeyError:
-    st.error("🚨 Secrets 配置有誤！請檢查環境變數。"); st.stop()
+    st.error("🚨 Secrets 配置有誤！請檢查環境變數 `BOOKING_API_KEY`。"); st.stop()
 
+# 建立 TCP 長連接渦輪
 if "http_session" not in st.session_state:
     session = requests.Session()
     retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
@@ -55,6 +48,7 @@ if "http_session" not in st.session_state:
     session.headers.update({"x-rapidapi-key": BOOKING_API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"})
     st.session_state.http_session = session
 
+# 狀態鎖定
 if "engine_running" not in st.session_state: st.session_state.engine_running = False
 if "task_list" not in st.session_state: st.session_state.task_list = []
 if "task_idx" not in st.session_state: st.session_state.task_idx = 0
@@ -65,11 +59,15 @@ if "current_workers" not in st.session_state: st.session_state.current_workers =
 if "current_batch" not in st.session_state: st.session_state.current_batch = 100
 if "engine_mode_name" not in st.session_state: st.session_state.engine_mode_name = "待命中"
 
+# 🌍 全球完整站點資料庫
 CI_GLOBAL_HUBS = {
     "台灣": {"TPE": "台北桃園", "KHH": "高雄小港"},
     "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
     "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
-    "港澳大陸": {"HKG": "香港", "MFM": "澳門", "PEK": "北京", "PVG": "上海浦東", "CAN": "廣州", "SZX": "深圳"}
+    "港澳大陸": {"HKG": "香港", "MFM": "澳門", "PEK": "北京", "PVG": "上海浦東", "CAN": "廣州", "SZX": "深圳"},
+    "北美洲": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "JFK": "紐約", "YVR": "溫哥華"},
+    "歐洲": {"FRA": "法蘭克福", "AMS": "阿姆斯特丹", "LHR": "倫敦", "VIE": "維也納", "FCO": "羅馬", "PRG": "布拉格"},
+    "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
 }
 ALL_FORMATTED_CITIES = [f"{code} ({name})" for region, cities in CI_GLOBAL_HUBS.items() for code, name in cities.items()]
 
@@ -129,12 +127,11 @@ def render_matrix_html(res_list, ref, title_str):
     return html
 
 # ==========================================
-# 1. API 引擎 (🔥 裝回防漏單冷卻機制)
+# 1. API 引擎 (防漏單與限流處理)
 # ==========================================
 def fetch_booking_bundle(legs, cabin, h1="", h4="", d1="", d4=""):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     
-    # 增加重試迴圈，專門對付 API 的 Rate Limit
     for attempt in range(4):
         try:
             res = st.session_state.http_session.get(
@@ -166,7 +163,6 @@ def fetch_booking_bundle(legs, cabin, h1="", h4="", d1="", d4=""):
                 return None
             
             elif res.status_code == 429:
-                # 🛡️ 關鍵修復：被限速時強制煞車 1.5 秒再重試，保證不漏單
                 time.sleep(1.5)
                 continue
                 
@@ -181,8 +177,8 @@ def fetch_booking_bundle(legs, cabin, h1="", h4="", d1="", d4=""):
 # ==========================================
 # 2. UI 面板
 # ==========================================
-st.markdown('<p class="custom-title">⚡ BUG FIXED RADAR</p>', unsafe_allow_html=True)
-st.markdown(f'<div class="quota-box">🛡️ <b>防漏單安全模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
+st.markdown('<p class="custom-title">⚡ GOLD EDITION RADAR</p>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">🛡️ <b>全網搜捕・防漏單安全模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.container():
     st.subheader("📌 核心行程 (D2 / D3)")
@@ -309,6 +305,7 @@ if not st.session_state.engine_running and len(st.session_state.task_list) > 0:
     st.markdown("---")
     if not st.session_state.valid_offers:
         st.warning(f"📡 雷達掃描完畢 (共 {len(st.session_state.task_list)} 組組合)，但未發現任何符合條件的聯程機票。")
+        st.info("💡 診斷建議：\n1. 該航線部分航段可能由夥伴聯營，被系統過濾。\n2. D1 到 D4 的日期跨度太大，違反機票的「最長停留期」規則。\n3. 請嘗試更換日期，或改搜雅加達等華航自營率 100% 的航點。")
     else:
         res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
         all_routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in st.session_state.valid_offers)))
