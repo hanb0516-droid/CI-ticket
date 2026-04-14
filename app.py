@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v36.1 PRUNING", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v36.2 PRUNING", page_icon="🎯", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -36,8 +36,17 @@ def get_hubs():
 
 CI_HUBS, ALL_CITIES, IDX_TPE, IDX_PRG, IDX_FRA = get_hubs()
 
+# 🛡️ 排雷一：精準攔截 KeyError，不再吞噬 st.stop()
+try:
+    API_KEY = st.secrets["BOOKING_API_KEY"]
+except KeyError:
+    st.error("🚨 缺少 API KEY (請確認 Secrets 設定)")
+    st.stop()
+
 # Email Secrets
-SENDER, PWD, RECEIVER = st.secrets.get("EMAIL_SENDER"), st.secrets.get("EMAIL_PASSWORD"), st.secrets.get("EMAIL_RECEIVER")
+SENDER = st.secrets.get("EMAIL_SENDER", "")
+PWD = st.secrets.get("EMAIL_PASSWORD", "")
+RECEIVER = st.secrets.get("EMAIL_RECEIVER", "")
 
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 if "is_hunting" not in st.session_state: st.session_state.is_hunting = False
@@ -83,10 +92,9 @@ def send_smart_email(res, ref, target_str, is_range):
     if not is_range:
         body = f"<h2>單一日期搜尋結果</h2>{generate_table_html(res, ref)}"
     else:
-        # 全圖 + 各航點分圖
         body = f"<h2>日期區間熱力圖分析</h2>{generate_matrix_html(res, ref, '全球最優組合')}"
         routes = sorted(list(set(f"{r['h1']}➔{r['h4']}" for r in res)))
-        for route in routes[:5]: # 限制前5條航點，避免信件過大
+        for route in routes[:5]:
             route_data = [r for r in res if f"{r['h1']}➔{r['h4']}" == route]
             body += f"<hr>{generate_matrix_html(route_data, ref, f'站點：{route}')}"
             
@@ -94,7 +102,8 @@ def send_smart_email(res, ref, target_str, is_range):
     try:
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
             s.starttls(); s.login(SENDER, PWD); s.send_message(msg)
-    except: pass
+    except Exception:
+        pass # 🛡️ 排雷二：安全捕捉例外
 
 # ==========================================
 # 2. 異步核心 (智慧剪枝)
@@ -123,7 +132,8 @@ async def fetch_task(client, sem, task_data, rid):
                             valid.append({"total": p, "legs": l_sum, "h1": h1[:3], "h4": h4[:3], "d1": d1, "d4": d4})
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 elif res.status_code == 429: await asyncio.sleep(1 + random.random())
-            except: pass
+            except Exception:
+                pass # 🛡️ 排雷二：安全捕捉例外
         return None
 
 # ==========================================
@@ -137,8 +147,7 @@ with st.sidebar:
     if st.button("🛑 緊急停止", type="primary"): 
         st.session_state.run_id = None; st.session_state.is_hunting = False; st.rerun()
 
-# 🛡️ 排雷一：修復導致 AttributeError 的格式化寫法
-st.markdown(f"<div class='quota-box' style='padding:10px; background:rgba(0,230,118,0.05); border-radius:8px; border:1px solid #00e676; margin-bottom:15px;'>🎯 <b>對標基準：</b> {st.session_state.ref_price:,} TWD</div>", unsafe_allow_html=True)
+st.markdown("<div style='padding:10px; background:rgba(0,230,118,0.05); border-radius:8px; border:1px solid #00e676; margin-bottom:15px;'>🎯 <b>對標基準：</b> {ref:,} TWD</div>".format(ref=st.session_state.ref_price), unsafe_allow_html=True)
 
 trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
 c1, c2 = st.columns(2)
@@ -189,18 +198,15 @@ async def start_hunt():
     limits = httpx.Limits(max_keepalive_connections=100, max_connections=200)
     
     async with httpx.AsyncClient(timeout=25.0, limits=limits) as client:
-        # Step 0: 校準基準價
         ref_legs = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
                     {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")}]
         ref_res = await fetch_task(client, asyncio.Semaphore(1), (ref_legs, "BUSINESS", "", "", "", ""), rid)
         ref_val = ref_res['total'] if ref_res else 200000
         st.session_state.ref_price = ref_val
 
-        # Step 1: 智慧剪枝 (智慧偵查)
         if pruning_on and len(tasks) > 100:
             status.info("🧠 啟動偵查兵：正在過濾最優質外站...")
 
-        # Step 2: 正式獵殺
         sem = asyncio.Semaphore(workers)
         start_t = time.time()
         coros = [fetch_task(client, sem, t, rid) for t in tasks]
