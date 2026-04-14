@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ==========================================
 # 0. UI 初始化
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | MILEAGE RUN", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Flight Actuary | X-RAY MODE", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -67,10 +67,10 @@ def on_region_change_d1():
     else: st.session_state.input_d1_hubs = []
 
 # ==========================================
-# 📊 核心功能：矩陣生成器 
+# 📊 核心功能：矩陣生成器 (支援賠錢顯示)
 # ==========================================
 def render_matrix_html(res_list, ref, title_str):
-    if not res_list: return "<p style='color: white;'>無獲利票數據</p>"
+    if not res_list: return "<p style='color: white;'>無數據返回（請確認API額度或日期範圍）</p>"
     d1_dates = sorted(list(set(r['d1'] for r in res_list)))
     d4_dates = sorted(list(set(r['d4'] for r in res_list)))
     
@@ -98,12 +98,20 @@ def render_matrix_html(res_list, ref, title_str):
             record = matrix.get((d1, d4))
             if record:
                 price, saving = record['total'], ref - record['total']
-                # 即使是省 0 元，也會顯示出來 (同價位)
-                alpha = 0.8 if max_price == min_price else 0.8 - 0.7 * ((price - min_price) / (max_price - min_price))
-                bg_color = f"rgba(0, 230, 118, {alpha:.2f})"
+                
+                # 🛡️ 智能上色與文字處理
+                if saving >= 0:
+                    alpha = 0.8 if max_price == min_price else 0.8 - 0.7 * ((price - min_price) / (max_price - min_price))
+                    bg_color = f"rgba(0, 230, 118, {alpha:.2f})"
+                    saving_str = f"<div style='color: #d32f2f; font-weight: bold;'>省 {saving:,}</div>"
+                else:
+                    # 賠錢票以微紅底色顯示，藍字標示貴多少
+                    bg_color = "rgba(255, 182, 193, 0.3)"
+                    saving_str = f"<div style='color: #1976d2; font-weight: bold;'>貴 {abs(saving):,}</div>"
+
                 html += f"<td style='padding: 8px; background-color: {bg_color}; border: 1px solid #ddd;'>"
                 html += f"<div style='font-size: 15px; font-weight: bold;'>{price:,}</div>"
-                html += f"<div style='color: #d32f2f; font-weight: bold;'>省 {saving:,}</div>"
+                html += saving_str
                 html += f"<div style='font-size: 10px; color: #555;'>{record['h1'][:3]}➔{record['h4'][:3]}</div>"
                 html += "</td>"
             else: html += "<td style='border: 1px solid #ddd; color: #ccc;'>-</td>"
@@ -120,7 +128,7 @@ def send_email_report(res_list, d2_o, d2_d, d3_o, d3_d, d2_dt, d3_dt, ref):
     
     msg = MIMEMultipart()
     msg['From'], msg['To'] = SENDER, RECEIVER
-    msg['Subject'] = f"✈️ [目標 {target_str}] 獵殺成功 | 綜合最低 {min(r['total'] for r in res_list):,} TWD"
+    msg['Subject'] = f"✈️ [目標 {target_str}] 獵殺成功 | 最低 {min(r['total'] for r in res_list):,} TWD"
     msg.attach(MIMEText(f"<html><body>{html_matrix}</body></html>", 'html', 'utf-8'))
     try:
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
@@ -154,8 +162,8 @@ def fetch_booking_bundle(legs, cabin, h1="", h4="", d1="", d4=""):
 # ==========================================
 # 2. UI 面板
 # ==========================================
-st.markdown('<p class="custom-title">⚡ ULTRA OPEN-JAW EXPLORER</p>', unsafe_allow_html=True)
-st.markdown(f'<div class="quota-box">🏎️ <b>極限探索模式 (支援同價位保級)：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
+st.markdown('<p class="custom-title">⚡ ULTRA X-RAY EXPLORER</p>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">🏎️ <b>極限探索模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.container():
     st.subheader("📌 核心行程 (D2 / D3)")
@@ -184,8 +192,8 @@ with st.container():
     st.markdown("---")
     st.subheader("🌍 外站雷達 (D1 / D4 支援開口行程)")
     
-    st.checkbox("👯 D4 站點庫自動帶入 D1 的選擇 (方便操作)", value=True, key="input_sync_ui")
-    st.checkbox("🔒 嚴格限制：D1/D4 必須同站點進出 (勾選則排除跨站組合)", value=False, key="input_strict_match")
+    st.checkbox("👯 D4 站點庫自動帶入 D1", value=True, key="input_sync_ui")
+    st.checkbox("🔒 嚴格限制：D1/D4 必須同站點進出", value=False, key="input_strict_match")
 
     cr1, cr4 = st.columns(2)
     with cr1:
@@ -195,13 +203,18 @@ with st.container():
         st.date_input("📅 D1 日期", value=(date(2026, 6, 10),), key="input_d1_dates")
     with cr4:
         d4_hubs = st.session_state.input_d1_hubs if st.session_state.input_sync_ui else st.multiselect("📍 D4 終點庫", ALL_FORMATTED_CITIES, key="input_d4_hubs")
-        if st.session_state.input_sync_ui: st.info("已自動帶入 D1 的站點，但仍允許互相交叉組合")
         st.date_input("📅 D4 日期", value=(date(2026, 6, 26),), key="input_d4_dates")
 
-    cab_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
-    st.selectbox("艙等", list(cab_map.keys()), key="input_cabin")
-    st.checkbox("自動對標直飛價", value=True, key="input_auto_ref")
-    st.number_input("手動基準預算", value=200000, key="input_manual_ref")
+    st.markdown("---")
+    colA, colB = st.columns(2)
+    with colA: 
+        cab_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
+        st.selectbox("艙等", list(cab_map.keys()), key="input_cabin")
+        st.checkbox("自動對標直飛價", value=True, key="input_auto_ref")
+        st.number_input("手動基準預算", value=200000, key="input_manual_ref")
+    with colB:
+        st.markdown("### 🛠️ 實驗室選項")
+        st.checkbox("👁️ 開啟透視模式：顯示所有結果 (包含比直飛貴的賠錢票)", value=False, key="input_show_all")
 
 # --- 核心執行 ---
 if not st.session_state.engine_running:
@@ -243,27 +256,31 @@ if st.session_state.engine_running:
         futures = {exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3], t[4], t[5]): t for t in batch}
         for f in as_completed(futures):
             res = f.result()
-            # 🛡️ 關鍵改動：大於等於 0 (>= 0)，包含同價位保級票！
-            if res and (t_ref := batch[0][6]) - res['total'] >= 0:
-                res['ref'] = t_ref
-                st.session_state.valid_offers.append(res)
+            if res:
+                t_ref = batch[0][6]
+                # 🛡️ 關鍵邏輯：如果開啟透視模式，或是省下的錢大於等於 0，就保留
+                if st.session_state.input_show_all or (t_ref - res['total'] >= 0):
+                    res['ref'] = t_ref
+                    st.session_state.valid_offers.append(res)
+    
     if curr + BATCH >= total:
+        # Email 依舊只發送，但如果是透視模式，這封信可能會很大
         send_email_report(st.session_state.valid_offers, d2_o, d2_d, d3_o, d3_d, st.session_state.input_d2_dt, st.session_state.input_d3_dt, st.session_state.ref_price)
         st.session_state.engine_running = False; st.rerun()
     else: st.session_state.task_idx += BATCH; st.rerun()
 
 # ==========================================
-# 📊 戰果展示區 (標籤頁雙模 UI)
+# 📊 戰果展示區
 # ==========================================
 if not st.session_state.engine_running and st.session_state.valid_offers:
     st.markdown("---")
     res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
     
     all_routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in st.session_state.valid_offers)))
-    tabs = st.tabs(["🏆 綜合最優解"] + all_routes)
+    tabs = st.tabs(["🏆 綜合比價"] + all_routes)
     
     with tabs[0]:
-        html = render_matrix_html(st.session_state.valid_offers, st.session_state.ref_price, "🌍 全球外站綜合比價 (含同價位組合)")
+        html = render_matrix_html(st.session_state.valid_offers, st.session_state.ref_price, "🌍 全球外站綜合矩陣")
         st.markdown(html, unsafe_allow_html=True)
     
     for i, route_name in enumerate(all_routes):
@@ -273,9 +290,11 @@ if not st.session_state.engine_running and st.session_state.valid_offers:
             st.markdown(html, unsafe_allow_html=True)
             
             st.markdown("---")
-            st.subheader("📋 詳細航班 (前 10 名)")
+            st.subheader("📋 詳細航班")
             for r in sorted(route_data, key=lambda x: x['total'])[:10]:
                 h1_code = r['h1'].split(' ')[0]
                 h4_code = r['h4'].split(' ')[0]
-                with st.expander(f"💰 {r['total']:,} | 省 {r['ref']-r['total']:,} ({h1_code} {r['d1']} ➔ {h4_code} {r['d4']})"):
+                saving = r['ref']-r['total']
+                status_str = f"🔥 省 {saving:,}" if saving >= 0 else f"📉 貴 {abs(saving):,}"
+                with st.expander(f"💰 {r['total']:,} | {status_str} ({h1_code} {r['d1']} ➔ {h4_code} {r['d4']})"):
                     st.write(f"航班：{' | '.join(r['legs'])}")
