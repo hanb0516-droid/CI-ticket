@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v38.9 ULTIMATE", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v39.0 BASELINE", page_icon="🔍", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -30,7 +30,6 @@ def get_hubs():
     }
     all_c = [f"{code} ({name})" for r, cities in h.items() for code, name in cities.items()]
     flat_map = {code: name for r in h.values() for code, name in r.items()}
-    
     def f_idx(target):
         for i, s in enumerate(all_c):
             if s.startswith(target): return i
@@ -53,11 +52,10 @@ if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 if "run_id" not in st.session_state: st.session_state.run_id = None
 if "ref_price" not in st.session_state: st.session_state.ref_price = 200000
 if "perf_stats" not in st.session_state: st.session_state.perf_stats = {"time": 0, "dps": 0}
-if "api_key_dead" not in st.session_state: st.session_state.api_key_dead = False
-if "quota_exceeded" not in st.session_state: st.session_state.quota_exceeded = False
+if "debug_logs" not in st.session_state: st.session_state.debug_logs = set()
 
 # ==========================================
-# 1. 核心工具函數 (含中文名稱優化)
+# 1. 核心工具函數 (v38.4 基準)
 # ==========================================
 def get_safe_dates(d_input):
     if isinstance(d_input, (list, tuple)):
@@ -124,7 +122,7 @@ def send_detailed_email(res, ref, target_str, is_range, elapsed, dps):
         print(f"Email failed: {e}")
 
 # ==========================================
-# 2. 異步核心引擎 (🛡️ 排雷警報：捕捉超限與封鎖)
+# 2. 異步核心引擎 (🛡️ 診斷探針掛載)
 # ==========================================
 async def fetch_api(client, sem, task_data, rid):
     if st.session_state.run_id != rid: return None
@@ -133,15 +131,24 @@ async def fetch_api(client, sem, task_data, rid):
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     
     async with sem:
-        for attempt in range(5):
+        for attempt in range(3):
             if st.session_state.run_id != rid: return None
             try:
-                res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=50.0)
+                res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=30.0)
+                
                 if res.status_code == 200:
                     raw = res.json()
+                    data = raw.get('data') or {}
+                    offers = data.get('flightOffers') or []
+                    
+                    if not offers:
+                        st.session_state.debug_logs.add(f"⚠️ API回傳 200，但找不到航班 (訊息: {raw.get('message', '無')})")
+                        return None
+
                     valid = []
-                    for o in raw.get('data', {}).get('flightOffers', []):
+                    for o in offers:
                         l_sum = []
+                        # 徹底解除航空與段數限制，照單全收
                         for seg in o.get('segments', []):
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
@@ -151,18 +158,18 @@ async def fetch_api(client, sem, task_data, rid):
                                 l_sum.append(f"{mk or op}{f.get('flightNumber', '')}")
                         p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
                         valid.append({"total": p, "legs": l_sum, "h1": h1[:3], "h4": h4[:3], "d1": d1, "d4": d4})
+                    
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
-                elif res.status_code in [401, 403]:
-                    st.session_state.api_key_dead = True # 金鑰失效或被封鎖
+                
+                elif res.status_code == 429:
+                    st.session_state.debug_logs.add(f"⛔ HTTP 429: 請求太頻繁或額度耗盡")
+                    await asyncio.sleep(1.5 + random.random())
+                else:
+                    st.session_state.debug_logs.add(f"❌ HTTP {res.status_code}: {res.text[:100]}")
                     return None
-                elif res.status_code == 429: 
-                    # 判斷是單純限流，還是額度真用光了
-                    if "exceeded" in res.text.lower() or "quota" in res.text.lower() or "limit" in res.text.lower():
-                        st.session_state.quota_exceeded = True
-                        return None
-                    await asyncio.sleep((1.5 ** attempt) + random.uniform(0.5, 1.5))
-            except Exception: 
-                await asyncio.sleep(2.0)
+            except Exception as e:
+                st.session_state.debug_logs.add(f"💥 系統異常: {type(e).__name__} - {str(e)}")
+                await asyncio.sleep(1.0)
         return None
 
 # ==========================================
@@ -216,8 +223,7 @@ with st.container():
 # 4. 獵殺執行大腦
 # ==========================================
 async def start_hunt():
-    st.session_state.api_key_dead = False
-    st.session_state.quota_exceeded = False
+    st.session_state.debug_logs.clear() # 每次啟動清空日誌
     rid = str(uuid.uuid4()); st.session_state.run_id = rid
     d1_s, d1_e = get_safe_dates(d1_r)
     d4_s, d4_e = get_safe_dates(d4_r)
@@ -244,20 +250,13 @@ async def start_hunt():
     bar = st.progress(0); status = st.empty(); final_res = []
     limits = httpx.Limits(max_keepalive_connections=150, max_connections=250)
     
-    async with httpx.AsyncClient(timeout=50.0, limits=limits) as client:
+    async with httpx.AsyncClient(timeout=30.0, limits=limits) as client:
         ref_val = manual_ref
         if auto_ref:
             status.info("🎯 正在獲取核心直飛市場基準價...")
             ref_l = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_s.strftime("%Y-%m-%d")},
                      {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_s.strftime("%Y-%m-%d")}]
             ref_res = await fetch_api(client, asyncio.Semaphore(1), (ref_l, cab_map[cab], "", "", "", ""), rid)
-            
-            # 🛡️ 致命錯誤攔截點：如果是因為沒額度導致獲取基準價失敗，直接拉警報！
-            if st.session_state.api_key_dead or st.session_state.quota_exceeded:
-                status.error("🚨 致命錯誤：API 金鑰無效，或「本月免費額度(500次)已徹底耗盡」。請至 RapidAPI 更換新的 API KEY！")
-                st.session_state.run_id = None
-                return
-                
             if ref_res: ref_val = ref_res['total']; st.session_state.ref_price = ref_val
 
         sem = asyncio.Semaphore(workers)
@@ -267,15 +266,7 @@ async def start_hunt():
         for i, coro in enumerate(asyncio.as_completed(coros)):
             if st.session_state.run_id != rid: return
             r = await coro
-            
-            # 🛡️ 執行中攔截：如果半路沒額度了，立刻停止並報警
-            if st.session_state.api_key_dead or st.session_state.quota_exceeded:
-                status.error("🚨 任務中斷：API 免費額度已耗盡，請更換新的 API KEY！")
-                st.session_state.run_id = None
-                return
-
             if r and (show_all or (ref_val - r['total'] >= 0)): final_res.append(r)
-            
             if i % 10 == 0 or i == len(tasks)-1:
                 elapsed_now = time.time() - total_start_time
                 rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
@@ -293,7 +284,7 @@ async def start_hunt():
     
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺 (v38.9 API 警報版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (基準除錯版)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
@@ -332,3 +323,11 @@ if st.session_state.valid_offers:
                 h1_c, h4_c = route_key.split(" ➔ ")
                 route_data = [r for r in st.session_state.valid_offers if r['h1'] == h1_c and r['h4'] == h4_c]
                 st.markdown(generate_matrix_html(route_data, st.session_state.ref_price, f"組合分析：{get_name(h1_c)} ➔ {get_name(h4_c)}"), unsafe_allow_html=True)
+
+# 🛡️ 真言偵錯面板：只要有錯誤，就會在這裡無所遁形
+if st.session_state.debug_logs:
+    st.markdown("---")
+    with st.expander("🔍 開發者偵錯日誌 (展開查看 API 真實狀態)", expanded=not st.session_state.valid_offers):
+        st.warning("以下是系統在背景遭遇的真實狀況：")
+        for log in list(st.session_state.debug_logs)[:20]: # 最多顯示 20 條不同錯誤
+            st.code(log)
