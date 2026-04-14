@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ==========================================
 # 0. UI 初始化
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | OPEN-JAW EXPLORER", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Flight Actuary | MILEAGE RUN", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -98,6 +98,7 @@ def render_matrix_html(res_list, ref, title_str):
             record = matrix.get((d1, d4))
             if record:
                 price, saving = record['total'], ref - record['total']
+                # 即使是省 0 元，也會顯示出來 (同價位)
                 alpha = 0.8 if max_price == min_price else 0.8 - 0.7 * ((price - min_price) / (max_price - min_price))
                 bg_color = f"rgba(0, 230, 118, {alpha:.2f})"
                 html += f"<td style='padding: 8px; background-color: {bg_color}; border: 1px solid #ddd;'>"
@@ -154,7 +155,7 @@ def fetch_booking_bundle(legs, cabin, h1="", h4="", d1="", d4=""):
 # 2. UI 面板
 # ==========================================
 st.markdown('<p class="custom-title">⚡ ULTRA OPEN-JAW EXPLORER</p>', unsafe_allow_html=True)
-st.markdown(f'<div class="quota-box">🏎️ <b>極限探索模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">🏎️ <b>極限探索模式 (支援同價位保級)：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.container():
     st.subheader("📌 核心行程 (D2 / D3)")
@@ -183,7 +184,6 @@ with st.container():
     st.markdown("---")
     st.subheader("🌍 外站雷達 (D1 / D4 支援開口行程)")
     
-    # 💡 介面與邏輯分離設計
     st.checkbox("👯 D4 站點庫自動帶入 D1 的選擇 (方便操作)", value=True, key="input_sync_ui")
     st.checkbox("🔒 嚴格限制：D1/D4 必須同站點進出 (勾選則排除跨站組合)", value=False, key="input_strict_match")
 
@@ -222,9 +222,7 @@ if not st.session_state.engine_running:
         tasks = []
         for h1_r in st.session_state.input_d1_hubs:
             for h4_r in d4_hubs:
-                # 🛡️ 智能跨站控制
                 if st.session_state.input_strict_match and h1_r != h4_r: continue
-                
                 h1, h4 = h1_r.split(" ")[0], h4_r.split(" ")[0]
                 for d1, d4 in product(d1_ts, d4_ts):
                     if d1 <= st.session_state.input_d2_dt and d4 >= st.session_state.input_d3_dt:
@@ -245,7 +243,8 @@ if st.session_state.engine_running:
         futures = {exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3], t[4], t[5]): t for t in batch}
         for f in as_completed(futures):
             res = f.result()
-            if res and (t_ref := batch[0][6]) - res['total'] > 0:
+            # 🛡️ 關鍵改動：大於等於 0 (>= 0)，包含同價位保級票！
+            if res and (t_ref := batch[0][6]) - res['total'] >= 0:
                 res['ref'] = t_ref
                 st.session_state.valid_offers.append(res)
     if curr + BATCH >= total:
@@ -260,16 +259,13 @@ if not st.session_state.engine_running and st.session_state.valid_offers:
     st.markdown("---")
     res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
     
-    # 動態抓取所有出現過的「起終點組合」
     all_routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in st.session_state.valid_offers)))
     tabs = st.tabs(["🏆 綜合最優解"] + all_routes)
     
-    # 綜合頁面
     with tabs[0]:
-        html = render_matrix_html(st.session_state.valid_offers, st.session_state.ref_price, "🌍 全球外站綜合比價 (最低價優先)")
+        html = render_matrix_html(st.session_state.valid_offers, st.session_state.ref_price, "🌍 全球外站綜合比價 (含同價位組合)")
         st.markdown(html, unsafe_allow_html=True)
     
-    # 各別組合頁面 (包含同站進出與開口跨站)
     for i, route_name in enumerate(all_routes):
         with tabs[i+1]:
             route_data = [r for r in st.session_state.valid_offers if f"{r['h1']} ➔ {r['h4']}" == route_name]
