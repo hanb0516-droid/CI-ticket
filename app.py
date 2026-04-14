@@ -1,17 +1,17 @@
 import streamlit as st
-import requests
+import httpx
+import asyncio
 import json
 import time
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import random
+import uuid
 from datetime import datetime, timedelta, date
 from itertools import product
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
 # 0. 全局初始化 & 基準風格
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | BASELINE", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v34.0 HYBRID", page_icon="🚀", layout="wide")
 
 st.markdown("""
 <style>
@@ -29,18 +29,9 @@ except KeyError:
 
 # 狀態管理
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
-if "engine_running" not in st.session_state: st.session_state.engine_running = False
+if "is_hunting" not in st.session_state: st.session_state.is_hunting = False
 if "ref_price" not in st.session_state: st.session_state.ref_price = 200000
-
-# 建立 TCP 長連接渦輪 (退回最穩定的 requests)
-if "http_session" not in st.session_state:
-    session = requests.Session()
-    retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
-    adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=retry)
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    session.headers.update({"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"})
-    st.session_state.http_session = session
+if "run_id" not in st.session_state: st.session_state.run_id = None
 
 CI_GLOBAL_HUBS = {
     "台灣": {"TPE": "台北桃園", "KHH": "高雄小港"},
@@ -58,48 +49,63 @@ def get_city_idx(code):
     return 0
 
 # ==========================================
-# 1. 任務執行引擎 (純淨 Threading 版)
+# 1. 任務執行引擎 (帶有防禦機制的 Asyncio)
 # ==========================================
-def fetch_task_sync(task_data):
+async def fetch_task_async(client, sem, task_data, current_run_id):
+    # 🛡️ 排雷二：殭屍檢測，如果 ID 不符立刻退出
+    if st.session_state.run_id != current_run_id: return None
+    
     legs, cabin, h1, h4, d1, d4 = task_data
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
+    headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     
-    for _ in range(3): # 簡單重試機制
-        try:
-            res = st.session_state.http_session.get(url, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=15)
-            if res.status_code == 200:
-                raw = res.json()
-                valid = []
-                for o in raw.get('data', {}).get('flightOffers', []):
-                    l_sum, is_ci = [], True
-                    for seg in o.get('segments', []):
-                        f = seg.get('legs', [{}])[0].get('flightInfo', {})
-                        if f.get('carrierInfo', {}).get('operatingCarrier') != "CI":
-                            is_ci = False; break
-                        l_sum.append(f"CI{f.get('flightNumber', '')}")
-                    p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
-                    if is_ci and len(l_sum) == len(legs):
-                        valid.append({"total": p, "legs": l_sum, "h1": h1[:3], "h4": h4[:3], "d1": d1, "d4": d4})
-                return sorted(valid, key=lambda x: x['total'])[0] if valid else None
-            elif res.status_code == 429:
-                time.sleep(1.5) # 撞牆冷卻
-        except:
-            time.sleep(1)
-    return None
+    async with sem:
+        for attempt in range(3):
+            if st.session_state.run_id != current_run_id: return None # 二次檢測
+            try:
+                res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=18.0)
+                if res.status_code == 200:
+                    raw = res.json()
+                    valid = []
+                    for o in raw.get('data', {}).get('flightOffers', []):
+                        l_sum, is_ci = [], True
+                        for seg in o.get('segments', []):
+                            f = seg.get('legs', [{}])[0].get('flightInfo', {})
+                            if f.get('carrierInfo', {}).get('operatingCarrier') != "CI":
+                                is_ci = False; break
+                            l_sum.append(f"CI{f.get('flightNumber', '')}")
+                        p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
+                        if is_ci and len(l_sum) == len(legs):
+                            valid.append({"total": p, "legs": l_sum, "h1": h1[:3], "h4": h4[:3], "d1": d1, "d4": d4})
+                    return sorted(valid, key=lambda x: x['total'])[0] if valid else None
+                elif res.status_code == 429:
+                    # 🛡️ 排雷一：隨機抖動 (Jitter)，破解 429 死亡螺旋
+                    await asyncio.sleep(1.0 + random.uniform(0.5, 2.0))
+            except:
+                await asyncio.sleep(0.5)
+        return None
 
 # ==========================================
-# 2. UI 佈局 (無連動負擔)
+# 2. UI 佈局 (保持上一版的零卡頓結構)
 # ==========================================
-st.markdown(f'<div class="quota-box">🧪 <b>基準測試版：</b> 原生多執行緒架構 | 🎯 基準：{st.session_state.ref_price:,}</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">🚀 <b>v34.0 終極引擎：</b> 破冰提速 & 防殭屍進程 | 🎯 基準：{st.session_state.ref_price:,}</div>', unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ 引擎")
+    st.header("⚙️ 引擎控制")
     cab_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
     cab = st.selectbox("艙等", list(cab_map.keys()))
-    workers = st.slider("併發執行緒 (Workers)", 10, 60, 35)
+    workers = st.slider("異步併發上限", 20, 80, 40)
     show_all = st.checkbox("👁️ 透視模式", value=False)
     auto_ref = st.checkbox("自動對標直飛", value=True)
     manual_ref = st.number_input("手動基準", value=200000)
+    
+    st.markdown("---")
+    # 🛡️ 急停開關
+    if st.button("🛑 停止 / 重置引擎", type="primary"):
+        st.session_state.run_id = None # 瞬間賜死所有背景工人
+        st.session_state.is_hunting = False
+        st.session_state.valid_offers = []
+        st.rerun()
 
 with st.container():
     trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
@@ -140,11 +146,9 @@ with st.container():
         d4_r = st.date_input("D4 範圍", value=(date(2026, 6, 26), date(2026, 6, 26)))
 
 # ==========================================
-# 3. 獵殺邏輯 (退回 ThreadPoolExecutor)
+# 3. 異步主控台
 # ==========================================
-if st.button("🚀 啟動基準獵殺", use_container_width=True):
-    st.session_state.valid_offers = [] # 啟動時清空舊資料
-    
+async def start_async_hunt():
     d1_s, d1_e = (d1_r[0], d1_r[-1]) if isinstance(d1_r, (list, tuple)) else (d1_r, d1_r)
     d4_s, d4_e = (d4_r[0], d4_r[-1]) if isinstance(d4_r, (list, tuple)) else (d4_r, d4_r)
     tasks = []
@@ -162,46 +166,76 @@ if st.button("🚀 啟動基準獵殺", use_container_width=True):
 
     if not tasks:
         st.warning("⚠️ 任務量為 0，請檢查日期或站點。")
-    else:
-        bar = st.progress(0, text="準備發射...")
-        res_list = []
+        return
+
+    # 生成本次任務專屬 ID
+    my_run_id = str(uuid.uuid4())
+    st.session_state.run_id = my_run_id
+
+    bar = st.progress(0)
+    status_area = st.empty()
+    res_list = []
+    
+    limits = httpx.Limits(max_keepalive_connections=100, max_connections=200)
+    async with httpx.AsyncClient(timeout=25.0, limits=limits) as client:
         ref_val = manual_ref
-        
-        # 校準直飛
         if auto_ref:
+            status_area.info("🎯 校準核心直飛價格中...")
             d_legs = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
                       {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")}]
-            ref_res = fetch_task_sync((d_legs, cab_map[cab], "", "", "", ""))
+            ref_res = await fetch_task_async(client, asyncio.Semaphore(1), (d_legs, cab_map[cab], "", "", "", ""), my_run_id)
             if ref_res: ref_val = ref_res['total']; st.session_state.ref_price = ref_val
 
-        # 多執行緒開跑
+        sem = asyncio.Semaphore(workers)
         start_t = time.time()
-        with ThreadPoolExecutor(max_workers=workers) as exe:
-            futures = [exe.submit(fetch_task_sync, t) for t in tasks]
-            for i, f in enumerate(as_completed(futures)):
-                r = f.result()
-                if r and (show_all or (ref_val - r['total'] >= 0)):
-                    r['ref'] = ref_val
-                    res_list.append(r)
-                
-                # 簡單的進度條刷新 (降低頻率防卡頓)
-                if i % max(1, len(tasks)//20) == 0 or i == len(tasks) - 1:
-                    rps = (i + 1) / (time.time() - start_t)
-                    bar.progress((i + 1) / len(tasks), text=f"⚡ 進度: {i+1}/{len(tasks)} | 時速: {rps:.1f} 筆/秒 | 獲取: {len(res_list)}")
+        last_ui_update = time.time()
+        
+        coros = [fetch_task_async(client, sem, t, my_run_id) for t in tasks]
+        
+        for i, coro in enumerate(asyncio.as_completed(coros)):
+            # 任務執行中，檢查是否已被使用者按下停止
+            if st.session_state.run_id != my_run_id:
+                status_area.warning("🚨 任務已由使用者強制中止！")
+                return # 直接切斷迴圈
 
-        st.session_state.valid_offers = res_list
-        st.rerun()
+            r = await coro
+            if r and (show_all or (ref_val - r['total'] >= 0)):
+                r['ref'] = ref_val
+                res_list.append(r)
+            
+            # 非阻塞更新 UI (每秒最多 1 次)
+            now = time.time()
+            if now - last_ui_update > 1.0 or i == len(tasks) - 1:
+                rps = (i + 1) / (now - start_t) if now > start_t else 0
+                bar.progress((i + 1) / len(tasks))
+                status_area.markdown(f'<div style="color:#00e676; font-weight:bold;">⚡ 進度: {i+1}/{len(tasks)} | 時速: {rps:.1f} RPS | 尋獲神票: {len(res_list)}</div>', unsafe_allow_html=True)
+                last_ui_update = now
+
+    # 🛡️ 排雷四：結果瘦身，防止 UI 渲染癱瘓
+    st.session_state.valid_offers = sorted(res_list, key=lambda x: x['total'])[:1000]
+    st.session_state.is_hunting = False
+    st.session_state.run_id = None
+    st.rerun()
+
+if st.button("🚀 啟動異步極速獵殺", disabled=st.session_state.is_hunting, use_container_width=True):
+    st.session_state.valid_offers = []
+    st.session_state.is_hunting = True
+    try:
+        asyncio.run(start_async_hunt())
+    except Exception as e:
+        st.error(f"系統異常: {e}")
+        st.session_state.is_hunting = False
 
 # ==========================================
-# 4. 戰果區
+# 4. 戰果展示
 # ==========================================
 if st.session_state.valid_offers:
     st.markdown("---")
-    res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
+    res = st.session_state.valid_offers
     
-    st.write(f"🏆 共找到 **{len(res)}** 組符合條件的機票 (對標價: {st.session_state.ref_price:,})")
+    st.write(f"🏆 成功鎖定 **{len(res)}** 組最佳神票 (對標價: {st.session_state.ref_price:,})")
     
-    # 簡單列表展示
+    # 簡單列表展示 (最高效，不卡頓)
     for r in res[:50]:
         diff = st.session_state.ref_price - r['total']
         with st.expander(f"💰 {r['total']:,} | {'省' if diff>=0 else '貴'} {abs(diff):,} ({r['h1']}➔{r['h4']})"):
