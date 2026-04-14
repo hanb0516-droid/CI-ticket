@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ==========================================
 # 0. UI 初始化與全局連線池
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | DIAGNOSTIC MODE", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Flight Actuary | BUG FIXED", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -48,7 +48,7 @@ except KeyError:
 
 if "http_session" not in st.session_state:
     session = requests.Session()
-    retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+    retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
     adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=retry)
     session.mount('http://', adapter)
     session.mount('https://', adapter)
@@ -129,48 +129,60 @@ def render_matrix_html(res_list, ref, title_str):
     return html
 
 # ==========================================
-# 1. API 引擎
+# 1. API 引擎 (🔥 裝回防漏單冷卻機制)
 # ==========================================
 def fetch_booking_bundle(legs, cabin, h1="", h4="", d1="", d4=""):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
-    try:
-        res = st.session_state.http_session.get(
-            url, 
-            params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, 
-            timeout=15
-        )
-        rem = res.headers.get('x-ratelimit-requests-remaining')
-        if rem: st.session_state.quota_remaining = rem
-        
-        if res.status_code == 200:
-            raw = res.json()
-            valid = []
-            for offer in raw.get('data', {}).get('flightOffers', []):
-                l_sum, is_ci = [], True
-                segments = offer.get('segments', [])
-                for seg in segments:
-                    legs_data = seg.get('legs', [{}])
-                    if not legs_data: continue
-                    car = legs_data[0].get('flightInfo', {}).get('carrierInfo', {}).get('operatingCarrier') or '??'
-                    # ⚠️ 這行是核心：只要有 1 段不是華航 (CI)，整張票就會被濾掉
-                    if car != "CI": is_ci = False; break
-                    l_sum.append(f"{car}{legs_data[0].get('flightInfo', {}).get('flightNumber', '')}")
-                
-                total_price = offer.get('priceBreakdown', {}).get('total', {}).get('units', 0)
-                if is_ci and len(l_sum) == (4 if h1 else 2) and total_price > 0:
-                    valid.append({"total": total_price, "legs": l_sum, "h1": h1, "h4": h4, "d1": d1, "d4": d4})
+    
+    # 增加重試迴圈，專門對付 API 的 Rate Limit
+    for attempt in range(4):
+        try:
+            res = st.session_state.http_session.get(
+                url, 
+                params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, 
+                timeout=15
+            )
+            rem = res.headers.get('x-ratelimit-requests-remaining')
+            if rem: st.session_state.quota_remaining = rem
             
-            if valid: return sorted(valid, key=lambda x: x['total'])[0]
-            return None
-        elif res.status_code == 403: return "QUOTA_EXCEEDED"
-    except Exception: pass
+            if res.status_code == 200:
+                raw = res.json()
+                valid = []
+                for offer in raw.get('data', {}).get('flightOffers', []):
+                    l_sum, is_ci = [], True
+                    segments = offer.get('segments', [])
+                    for seg in segments:
+                        legs_data = seg.get('legs', [{}])
+                        if not legs_data: continue
+                        car = legs_data[0].get('flightInfo', {}).get('carrierInfo', {}).get('operatingCarrier') or '??'
+                        if car != "CI": is_ci = False; break
+                        l_sum.append(f"{car}{legs_data[0].get('flightInfo', {}).get('flightNumber', '')}")
+                    
+                    total_price = offer.get('priceBreakdown', {}).get('total', {}).get('units', 0)
+                    if is_ci and len(l_sum) == (4 if h1 else 2) and total_price > 0:
+                        valid.append({"total": total_price, "legs": l_sum, "h1": h1, "h4": h4, "d1": d1, "d4": d4})
+                
+                if valid: return sorted(valid, key=lambda x: x['total'])[0]
+                return None
+            
+            elif res.status_code == 429:
+                # 🛡️ 關鍵修復：被限速時強制煞車 1.5 秒再重試，保證不漏單
+                time.sleep(1.5)
+                continue
+                
+            elif res.status_code == 403: return "QUOTA_EXCEEDED"
+            
+        except Exception:
+            time.sleep(1)
+            continue
+            
     return None
 
 # ==========================================
 # 2. UI 面板
 # ==========================================
-st.markdown('<p class="custom-title">⚡ GOLD EDITION RADAR</p>', unsafe_allow_html=True)
-st.markdown(f'<div class="quota-box">🛡️ <b>TCP渦輪防護模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
+st.markdown('<p class="custom-title">⚡ BUG FIXED RADAR</p>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">🛡️ <b>防漏單安全模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.container():
     st.subheader("📌 核心行程 (D2 / D3)")
@@ -224,7 +236,7 @@ with st.container():
 
 # --- 核心執行 ---
 if not st.session_state.engine_running:
-    if st.button("🚀 啟動 GOLD 旗艦獵殺", use_container_width=True):
+    if st.button("🚀 啟動防漏單獵殺", use_container_width=True):
         st.session_state.valid_offers.clear()
         st.session_state.task_list.clear()
         st.session_state.task_idx = 0
@@ -260,11 +272,11 @@ if not st.session_state.engine_running:
         else:
             total_t = len(tasks)
             if total_t <= 50:
-                st.session_state.current_batch = total_t; st.session_state.current_workers = 35; st.session_state.engine_mode_name = "⚡ 跑車檔：高速快查"
+                st.session_state.current_batch = total_t; st.session_state.current_workers = 35; st.session_state.engine_mode_name = "⚡ 高速掃描"
             elif total_t <= 300:
-                st.session_state.current_batch = 150; st.session_state.current_workers = 30; st.session_state.engine_mode_name = "🚀 休旅檔：穩健巡航"
+                st.session_state.current_batch = 150; st.session_state.current_workers = 30; st.session_state.engine_mode_name = "🚀 穩健巡航"
             else:
-                st.session_state.current_batch = 400; st.session_state.current_workers = 25; st.session_state.engine_mode_name = "🛡️ 戰車檔：海量吞吐"
+                st.session_state.current_batch = 400; st.session_state.current_workers = 25; st.session_state.engine_mode_name = "🛡️ 安全防漏"
             st.session_state.task_list, st.session_state.engine_running = tasks, True
             st.rerun()
 
@@ -291,14 +303,12 @@ if st.session_state.engine_running:
     else: st.session_state.task_idx += BATCH; st.rerun()
 
 # ==========================================
-# 📊 戰果展示區 (🛡️ 排雷加強：無資料時的防呆提示)
+# 📊 戰果展示區
 # ==========================================
 if not st.session_state.engine_running and len(st.session_state.task_list) > 0:
     st.markdown("---")
     if not st.session_state.valid_offers:
-        # ⚠️ 如果跑完了，但是清單是空的，秀出這個警告！
-        st.warning(f"📡 雷達掃描完畢 (共 {len(st.session_state.task_list)} 組組合)，但未發現任何符合條件的「純華航 (CI)」聯程機票。")
-        st.info("💡 診斷建議：\n1. 該航線部分航段可能由大韓航空 (KE) 等夥伴聯營，被系統自動過濾。\n2. D1 到 D4 的日期跨度太大，違反特價機票的「最長停留期 (Max Stay)」規則。\n3. 請嘗試更換日期，或改搜雅加達 (CGK) 等華航自營率 100% 的航點。")
+        st.warning(f"📡 雷達掃描完畢 (共 {len(st.session_state.task_list)} 組組合)，但未發現任何符合條件的聯程機票。")
     else:
         res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
         all_routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in st.session_state.valid_offers)))
