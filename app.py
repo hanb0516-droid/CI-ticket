@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ==========================================
 # 0. UI 初始化
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | ULTRA DASHBOARD", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Flight Actuary | OPEN-JAW EXPLORER", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -25,7 +25,7 @@ st.markdown("""
         background-size: cover !important; background-position: center !important; background-attachment: fixed !important;
     }
     .custom-title {
-        background: linear-gradient(45deg, #00e676, #ff8c00); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        background: linear-gradient(45deg, #00e676, #00b0ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         font-weight: 900; font-size: 3.5rem; text-shadow: 0px 5px 20px rgba(0, 230, 118, 0.3);
     }
     .quota-box {
@@ -34,7 +34,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 讀取 Secrets
 try:
     BOOKING_API_KEY = st.secrets["BOOKING_API_KEY"]
     SENDER = st.secrets.get("EMAIL_SENDER")
@@ -68,10 +67,10 @@ def on_region_change_d1():
     else: st.session_state.input_d1_hubs = []
 
 # ==========================================
-# 📊 核心功能：矩陣生成器 (支援單一與綜合)
+# 📊 核心功能：矩陣生成器 
 # ==========================================
 def render_matrix_html(res_list, ref, title_str):
-    if not res_list: return "<p>無獲利票數據</p>"
+    if not res_list: return "<p style='color: white;'>無獲利票數據</p>"
     d1_dates = sorted(list(set(r['d1'] for r in res_list)))
     d4_dates = sorted(list(set(r['d4'] for r in res_list)))
     
@@ -88,7 +87,7 @@ def render_matrix_html(res_list, ref, title_str):
     <div style="background-color: #ffffff; color: #333333; padding: 20px; border-radius: 12px; margin-top: 10px;">
         <h3 style="color: #333; margin-top: 0;">{title_str}</h3>
         <table border="1" style="border-collapse: collapse; text-align: center; width: 100%; font-size: 13px;">
-            <tr style="background-color: #333; color: white;"><th>D4 ↘ \\ D1 去 ➡</th>
+            <tr style="background-color: #333; color: white;"><th>D4回 ↘ \\ D1去 ➡</th>
     """
     for d1 in d1_dates: html += f"<th style='padding: 8px;'>{d1[5:]}</th>"
     html += "</tr>"
@@ -116,7 +115,6 @@ def send_email_report(res_list, d2_o, d2_d, d3_o, d3_d, d2_dt, d3_dt, ref):
     targets = [city for city in [d2_d, d3_o] if city not in ["TPE", "KHH"]]
     target_str = "/".join(list(dict.fromkeys(targets))) if targets else "海外"
     
-    # Email 僅發送「綜合最優解」矩陣，並附上明細清單
     html_matrix = render_matrix_html(res_list, ref, f"綜合最優解矩陣 (對標直飛：{ref:,})")
     
     msg = MIMEMultipart()
@@ -155,8 +153,8 @@ def fetch_booking_bundle(legs, cabin, h1="", h4="", d1="", d4=""):
 # ==========================================
 # 2. UI 面板
 # ==========================================
-st.markdown('<p class="custom-title">⚡ ULTRA HYPER-DASHBOARD</p>', unsafe_allow_html=True)
-st.markdown(f'<div class="quota-box">🏎️ <b>極限模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
+st.markdown('<p class="custom-title">⚡ ULTRA OPEN-JAW EXPLORER</p>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">🏎️ <b>極限探索模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.container():
     st.subheader("📌 核心行程 (D2 / D3)")
@@ -183,8 +181,12 @@ with st.container():
         d2_o, d2_d, d3_o, d3_d = st.session_state.input_d2_o.split(" ")[0], st.session_state.input_d2_d.split(" ")[0], st.session_state.input_d3_o.split(" ")[0], st.session_state.input_d3_d.split(" ")[0]
 
     st.markdown("---")
-    st.subheader("🌍 外站雷達 (D1 / D4)")
-    st.checkbox("👯 D1/D4 同步為同一站點", value=True, key="input_sync")
+    st.subheader("🌍 外站雷達 (D1 / D4 支援開口行程)")
+    
+    # 💡 介面與邏輯分離設計
+    st.checkbox("👯 D4 站點庫自動帶入 D1 的選擇 (方便操作)", value=True, key="input_sync_ui")
+    st.checkbox("🔒 嚴格限制：D1/D4 必須同站點進出 (勾選則排除跨站組合)", value=False, key="input_strict_match")
+
     cr1, cr4 = st.columns(2)
     with cr1:
         st.multiselect("D1 區域過濾", list(CI_GLOBAL_HUBS.keys()), key="input_d1_reg", on_change=on_region_change_d1)
@@ -192,7 +194,8 @@ with st.container():
         st.multiselect("📍 D1 起點庫", d1_opt, key="input_d1_hubs")
         st.date_input("📅 D1 日期", value=(date(2026, 6, 10),), key="input_d1_dates")
     with cr4:
-        d4_hubs = st.session_state.input_d1_hubs if st.session_state.input_sync else st.multiselect("📍 D4 終點庫", ALL_FORMATTED_CITIES, key="input_d4_hubs")
+        d4_hubs = st.session_state.input_d1_hubs if st.session_state.input_sync_ui else st.multiselect("📍 D4 終點庫", ALL_FORMATTED_CITIES, key="input_d4_hubs")
+        if st.session_state.input_sync_ui: st.info("已自動帶入 D1 的站點，但仍允許互相交叉組合")
         st.date_input("📅 D4 日期", value=(date(2026, 6, 26),), key="input_d4_dates")
 
     cab_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
@@ -217,15 +220,19 @@ if not st.session_state.engine_running:
 
         d1_ts, d4_ts = [d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days+1)], [d4_s + timedelta(days=i) for i in range((d4_e-d4_s).days+1)]
         tasks = []
-        for h1_r, h4_r in product(st.session_state.input_d1_hubs, d4_hubs):
-            h1, h4 = h1_r.split(" ")[0], h4_r.split(" ")[0]
-            for d1, d4 in product(d1_ts, d4_ts):
-                if d1 <= st.session_state.input_d2_dt and d4 >= st.session_state.input_d3_dt:
-                    l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2_o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")}, 
-                         {"fromId": f"{d2_o}.AIRPORT", "toId": f"{d2_d}.AIRPORT", "date": st.session_state.input_d2_dt.strftime("%Y-%m-%d")}, 
-                         {"fromId": f"{d3_o}.AIRPORT", "toId": f"{d3_d}.AIRPORT", "date": st.session_state.input_d3_dt.strftime("%Y-%m-%d")}, 
-                         {"fromId": f"{d3_d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
-                    tasks.append((l, cab_map[st.session_state.input_cabin], h1_r, h4_r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d"), final_ref))
+        for h1_r in st.session_state.input_d1_hubs:
+            for h4_r in d4_hubs:
+                # 🛡️ 智能跨站控制
+                if st.session_state.input_strict_match and h1_r != h4_r: continue
+                
+                h1, h4 = h1_r.split(" ")[0], h4_r.split(" ")[0]
+                for d1, d4 in product(d1_ts, d4_ts):
+                    if d1 <= st.session_state.input_d2_dt and d4 >= st.session_state.input_d3_dt:
+                        l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2_o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")}, 
+                             {"fromId": f"{d2_o}.AIRPORT", "toId": f"{d2_d}.AIRPORT", "date": st.session_state.input_d2_dt.strftime("%Y-%m-%d")}, 
+                             {"fromId": f"{d3_o}.AIRPORT", "toId": f"{d3_d}.AIRPORT", "date": st.session_state.input_d3_dt.strftime("%Y-%m-%d")}, 
+                             {"fromId": f"{d3_d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
+                        tasks.append((l, cab_map[st.session_state.input_cabin], h1_r, h4_r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d"), final_ref))
         if tasks:
             st.session_state.task_list, st.session_state.task_idx, st.session_state.valid_offers, st.session_state.engine_running = tasks, 0, [], True
             st.rerun()
@@ -251,28 +258,28 @@ if st.session_state.engine_running:
 # ==========================================
 if not st.session_state.engine_running and st.session_state.valid_offers:
     st.markdown("---")
+    res = sorted(st.session_state.valid_offers, key=lambda x: x['total'])
     
-    # 🎯 分類資料
+    # 動態抓取所有出現過的「起終點組合」
     all_routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in st.session_state.valid_offers)))
-    
-    # 🎯 建立標籤頁
     tabs = st.tabs(["🏆 綜合最優解"] + all_routes)
     
-    # 第一頁：綜合最優
+    # 綜合頁面
     with tabs[0]:
         html = render_matrix_html(st.session_state.valid_offers, st.session_state.ref_price, "🌍 全球外站綜合比價 (最低價優先)")
         st.markdown(html, unsafe_allow_html=True)
     
-    # 後續分頁：各別外站路徑
+    # 各別組合頁面 (包含同站進出與開口跨站)
     for i, route_name in enumerate(all_routes):
         with tabs[i+1]:
             route_data = [r for r in st.session_state.valid_offers if f"{r['h1']} ➔ {r['h4']}" == route_name]
             html = render_matrix_html(route_data, st.session_state.ref_price, f"📍 {route_name} 專屬矩陣")
             st.markdown(html, unsafe_allow_html=True)
             
-            # 顯示該路徑的前 10 名明細
             st.markdown("---")
             st.subheader("📋 詳細航班 (前 10 名)")
             for r in sorted(route_data, key=lambda x: x['total'])[:10]:
-                with st.expander(f"💰 {r['total']:,} | 省 {r['ref']-r['total']:,} ({r['d1']} ➔ {r['d4']})"):
+                h1_code = r['h1'].split(' ')[0]
+                h4_code = r['h4'].split(' ')[0]
+                with st.expander(f"💰 {r['total']:,} | 省 {r['ref']-r['total']:,} ({h1_code} {r['d1']} ➔ {h4_code} {r['d4']})"):
                     st.write(f"航班：{' | '.join(r['legs'])}")
