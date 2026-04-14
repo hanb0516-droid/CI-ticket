@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v38.2 FIX", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v38.4 NAME+", page_icon="🎯", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -29,13 +29,16 @@ def get_hubs():
         "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
     }
     all_c = [f"{code} ({name})" for r, cities in h.items() for code, name in cities.items()]
+    # 建立一個方便查詢的平面字典
+    flat_map = {code: name for r in h.values() for code, name in r.items()}
+    
     def f_idx(target):
         for i, s in enumerate(all_c):
             if s.startswith(target): return i
         return 0
-    return h, all_c, f_idx("TPE"), f_idx("PRG"), f_idx("FRA")
+    return h, all_c, flat_map, f_idx("TPE"), f_idx("PRG"), f_idx("FRA")
 
-CI_HUBS, ALL_CITIES, IDX_TPE, IDX_PRG, IDX_FRA = get_hubs()
+CI_HUBS, ALL_CITIES, AIRPORT_MAP, IDX_TPE, IDX_PRG, IDX_FRA = get_hubs()
 
 # Secrets 讀取
 try:
@@ -55,7 +58,7 @@ if "ref_price" not in st.session_state: st.session_state.ref_price = 200000
 if "perf_stats" not in st.session_state: st.session_state.perf_stats = {"time": 0, "dps": 0}
 
 # ==========================================
-# 1. 核心工具函數 (分流矩陣與 Email)
+# 1. 核心工具函數 (含中文名稱優化)
 # ==========================================
 def get_safe_dates(d_input):
     if isinstance(d_input, (list, tuple)):
@@ -63,8 +66,11 @@ def get_safe_dates(d_input):
         if len(d_input) == 1: return d_input[0], d_input[0]
     return d_input, d_input
 
+def get_name(code):
+    return f"{code} ({AIRPORT_MAP.get(code, '未知')})"
+
 def generate_table_html(res, ref):
-    rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{r['h1']}➔{r['h4']}</td><td>{r['d1']}/{r['d4']}</td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in res[:50]])
+    rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{get_name(r['h1'])} ➔ {get_name(r['h4'])}</td><td>{r['d1']}/{r['d4']}</td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in res[:50]])
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead><tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>價差</th><th>路線</th><th>日期組合</th><th>航班明細</th></tr></thead><tbody>{rows}</tbody></table>"
 
 def generate_matrix_html(res, ref, title):
@@ -78,7 +84,7 @@ def generate_matrix_html(res, ref, title):
     h = [f"<h4 style='margin-bottom:5px; color:#2c3e50;'>📍 {title}</h4><table border='1' style='border-collapse:collapse;font-size:11px;text-align:center;margin-bottom:15px;'>"]
     h.append("<tr style='background:#333;color:#fff;'><th>D4↘\\D1➡</th>" + "".join([f"<th>{d[5:]}</th>" for d in d1_dates]) + "</tr>")
     for d4 in d4_dates:
-        row = [f"<tr><td style='background:#f2f2f2;font-weight:bold;'>{d4[5:]}</td>"]
+        row = [f"<tr><td style='background:#f2f2f2;font-weight:bold;'>{d4[5:]}</td>" ]
         for d1 in d1_dates:
             r = matrix.get((d1, d4))
             if r:
@@ -104,10 +110,12 @@ def send_detailed_email(res, ref, target_str, is_range, elapsed, dps):
         body = f"<h2>單一日期精確搜尋結果</h2>{stats_html}<h3>📋 獲利神票榜</h3>{generate_table_html(res, ref)}"
     else:
         body = f"<h2>日期區間綜合分析報告</h2>{stats_html}<h3>📋 獲利神票榜 (Top 50)</h3>{generate_table_html(res, ref)}<hr><h3>📊 各站點專屬熱力圖</h3>"
-        routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in res)))
-        for route in routes[:10]:
-            route_data = [r for r in res if f"{r['h1']} ➔ {r['h4']}" == route]
-            body += generate_matrix_html(route_data, ref, f"路線組合：{route}")
+        routes = sorted(list(set(f"{get_name(r['h1'])} ➔ {get_name(r['h4'])}" for r in res)))
+        for route_str in routes[:10]:
+            h1_code = route_str.split(" (")[0]
+            h4_code = route_str.split(" ➔ ")[1].split(" (")[0]
+            route_data = [r for r in res if r['h1'] == h1_code and r['h4'] == h4_code]
+            body += generate_matrix_html(route_data, ref, f"路線組合：{route_str}")
             
     msg.attach(MIMEText(f"<html><body style='font-family:sans-serif;'>{body}</body></html>", 'html', 'utf-8'))
     try:
@@ -135,7 +143,6 @@ async def fetch_api(client, sem, task_data, rid):
                     for o in raw.get('data', {}).get('flightOffers', []):
                         l_sum, is_ci = [], True
                         segs = o.get('segments', [])
-                        # 🛠️ 修復點 2：解析器強化，支援聯營航班(Marketing)與多重轉機(Layovers)
                         for seg in segs:
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
@@ -163,7 +170,6 @@ with st.sidebar:
     cab_map = {"商務艙": "BUSINESS", "豪經艙": "PREMIUM_ECONOMY", "經濟艙": "ECONOMY"}
     cab = st.selectbox("艙等", list(cab_map.keys()))
     workers = st.slider("併發上限 (RPS調整)", 20, 100, 80)
-    # 🛠️ 修復點 1：透視模式開關回歸！
     show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     email_on = st.checkbox("📧 完成後發送報告", value=True)
     auto_ref = st.checkbox("自動對標直飛", value=True)
@@ -238,10 +244,7 @@ async def start_hunt():
         for i, coro in enumerate(asyncio.as_completed(coros)):
             if st.session_state.run_id != rid: return
             r = await coro
-            
-            # 🛠️ 修復點 3：結合 show_all 開關，真正實現透視所有結果
             if r and (show_all or (ref_val - r['total'] >= 0)): final_res.append(r)
-            
             if i % 10 == 0 or i == len(tasks)-1:
                 elapsed_now = time.time() - total_start_time
                 rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
@@ -259,7 +262,7 @@ async def start_hunt():
     
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺 (v38.2 尋票修復版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v38.4)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
@@ -285,7 +288,7 @@ if st.session_state.valid_offers:
     with t1:
         df = pd.DataFrame([{
             "總價 (TWD)": f"{r['total']:,}", "獲利": f"{st.session_state.ref_price-r['total']:,}",
-            "站點組合": f"{r['h1']}➔{r['h4']}", "日期": f"{r['d1']}~{r['d4']}", "航班明細": " | ".join(r['legs'])
+            "站點組合": f"{get_name(r['h1'])} ➔ {get_name(r['h4'])}", "日期": f"{r['d1']}~{r['d4']}", "航班明細": " | ".join(r['legs'])
         } for r in st.session_state.valid_offers])
         st.dataframe(df, use_container_width=True, hide_index=True)
         
@@ -294,6 +297,7 @@ if st.session_state.valid_offers:
         if not routes:
             st.info("無獲利矩陣資料")
         else:
-            for route in routes:
-                route_data = [r for r in st.session_state.valid_offers if f"{r['h1']} ➔ {r['h4']}" == route]
-                st.markdown(generate_matrix_html(route_data, st.session_state.ref_price, f"組合分析：{route}"), unsafe_allow_html=True)
+            for route_key in routes:
+                h1_c, h4_c = route_key.split(" ➔ ")
+                route_data = [r for r in st.session_state.valid_offers if r['h1'] == h1_c and r['h4'] == h4_c]
+                st.markdown(generate_matrix_html(route_data, st.session_state.ref_price, f"組合分析：{get_name(h1_c)} ➔ {get_name(h4_c)}"), unsafe_allow_html=True)
