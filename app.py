@@ -12,9 +12,9 @@ from itertools import product
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==========================================
-# 0. UI 初始化
+# 0. UI 初始化與精緻化 CSS
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | X-RAY MODE", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Flight Actuary | SMART AUTO", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -24,13 +24,15 @@ st.markdown("""
         url("https://images.unsplash.com/photo-1436491865332-7a61a109cc05?q=80&w=2074&auto=format&fit=crop");
         background-size: cover !important; background-position: center !important; background-attachment: fixed !important;
     }
+    html, body, [class*="st-"] { font-size: 14px !important; }
     .custom-title {
         background: linear-gradient(45deg, #00e676, #00b0ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        font-weight: 900; font-size: 3.5rem; text-shadow: 0px 5px 20px rgba(0, 230, 118, 0.3);
+        font-weight: 900; font-size: 2.5rem !important; text-shadow: 0px 5px 20px rgba(0, 230, 118, 0.3); margin-bottom: -10px;
     }
     .quota-box {
-        padding: 15px; background: rgba(0, 230, 118, 0.1); border-radius: 12px; border: 2px solid #00e676; margin-bottom: 25px;
+        padding: 10px; background: rgba(0, 230, 118, 0.1); border-radius: 8px; border: 1px solid #00e676; margin-bottom: 20px; font-size: 13px;
     }
+    .streamlit-expanderHeader { font-size: 13px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -50,6 +52,11 @@ if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 if "quota_remaining" not in st.session_state: st.session_state.quota_remaining = "12,000"
 if "ref_price" not in st.session_state: st.session_state.ref_price = 0
 
+# 動態引擎參數
+if "current_workers" not in st.session_state: st.session_state.current_workers = 20
+if "current_batch" not in st.session_state: st.session_state.current_batch = 60
+if "engine_mode_name" not in st.session_state: st.session_state.engine_mode_name = "待命中"
+
 CI_GLOBAL_HUBS = {
     "台灣": {"TPE": "台北桃園", "KHH": "高雄小港"},
     "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
@@ -67,10 +74,10 @@ def on_region_change_d1():
     else: st.session_state.input_d1_hubs = []
 
 # ==========================================
-# 📊 核心功能：矩陣生成器 (支援賠錢顯示)
+# 📊 矩陣生成器
 # ==========================================
 def render_matrix_html(res_list, ref, title_str):
-    if not res_list: return "<p style='color: white;'>無數據返回（請確認API額度或日期範圍）</p>"
+    if not res_list: return "<p style='color: white;'>無符合條件數據</p>"
     d1_dates = sorted(list(set(r['d1'] for r in res_list)))
     d4_dates = sorted(list(set(r['d4'] for r in res_list)))
     
@@ -84,86 +91,79 @@ def render_matrix_html(res_list, ref, title_str):
             max_price = max(max_price, r['total'])
 
     html = f"""
-    <div style="background-color: #ffffff; color: #333333; padding: 20px; border-radius: 12px; margin-top: 10px;">
-        <h3 style="color: #333; margin-top: 0;">{title_str}</h3>
-        <table border="1" style="border-collapse: collapse; text-align: center; width: 100%; font-size: 13px;">
+    <div style="background-color: #ffffff; color: #333333; padding: 15px; border-radius: 10px; margin-top: 10px;">
+        <h4 style="color: #333; margin-top: 0; font-size: 16px;">{title_str}</h4>
+        <table border="1" style="border-collapse: collapse; text-align: center; width: 100%; font-size: 12px;">
             <tr style="background-color: #333; color: white;"><th>D4回 ↘ \\ D1去 ➡</th>
     """
-    for d1 in d1_dates: html += f"<th style='padding: 8px;'>{d1[5:]}</th>"
+    for d1 in d1_dates: html += f"<th style='padding: 6px;'>{d1[5:]}</th>"
     html += "</tr>"
     
     for d4 in d4_dates:
-        html += f"<tr><th style='padding: 8px; background-color: #f2f2f2;'>{d4[5:]}</th>"
+        html += f"<tr><th style='padding: 6px; background-color: #f2f2f2;'>{d4[5:]}</th>"
         for d1 in d1_dates:
             record = matrix.get((d1, d4))
             if record:
                 price, saving = record['total'], ref - record['total']
-                
-                # 🛡️ 智能上色與文字處理
                 if saving >= 0:
                     alpha = 0.8 if max_price == min_price else 0.8 - 0.7 * ((price - min_price) / (max_price - min_price))
                     bg_color = f"rgba(0, 230, 118, {alpha:.2f})"
-                    saving_str = f"<div style='color: #d32f2f; font-weight: bold;'>省 {saving:,}</div>"
+                    saving_str = f"<div style='color: #d32f2f; font-weight: bold; font-size: 11px;'>省 {saving:,}</div>"
                 else:
-                    # 賠錢票以微紅底色顯示，藍字標示貴多少
                     bg_color = "rgba(255, 182, 193, 0.3)"
-                    saving_str = f"<div style='color: #1976d2; font-weight: bold;'>貴 {abs(saving):,}</div>"
+                    saving_str = f"<div style='color: #1976d2; font-weight: bold; font-size: 11px;'>貴 {abs(saving):,}</div>"
 
-                html += f"<td style='padding: 8px; background-color: {bg_color}; border: 1px solid #ddd;'>"
-                html += f"<div style='font-size: 15px; font-weight: bold;'>{price:,}</div>"
+                html += f"<td style='padding: 6px; background-color: {bg_color}; border: 1px solid #ddd;'>"
+                html += f"<div style='font-size: 13px; font-weight: bold;'>{price:,}</div>"
                 html += saving_str
-                html += f"<div style='font-size: 10px; color: #555;'>{record['h1'][:3]}➔{record['h4'][:3]}</div>"
+                html += f"<div style='font-size: 9px; color: #555;'>{record['h1'][:3]}➔{record['h4'][:3]}</div>"
                 html += "</td>"
             else: html += "<td style='border: 1px solid #ddd; color: #ccc;'>-</td>"
         html += "</tr>"
     html += "</table></div>"
     return html
 
-def send_email_report(res_list, d2_o, d2_d, d3_o, d3_d, d2_dt, d3_dt, ref):
-    if not res_list: return False
-    targets = [city for city in [d2_d, d3_o] if city not in ["TPE", "KHH"]]
-    target_str = "/".join(list(dict.fromkeys(targets))) if targets else "海外"
-    
-    html_matrix = render_matrix_html(res_list, ref, f"綜合最優解矩陣 (對標直飛：{ref:,})")
-    
-    msg = MIMEMultipart()
-    msg['From'], msg['To'] = SENDER, RECEIVER
-    msg['Subject'] = f"✈️ [目標 {target_str}] 獵殺成功 | 最低 {min(r['total'] for r in res_list):,} TWD"
-    msg.attach(MIMEText(f"<html><body>{html_matrix}</body></html>", 'html', 'utf-8'))
-    try:
-        with smtplib.SMTP('smtp.gmail.com', 587) as s:
-            s.starttls(); s.login(SENDER, PWD); s.send_message(msg)
-        return True
-    except: return False
-
 # ==========================================
-# 1. API 引擎
+# 1. API 引擎 (防漏單與限流處理保留)
 # ==========================================
 def fetch_booking_bundle(legs, cabin, h1="", h4="", d1="", d4=""):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": BOOKING_API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
-    try:
-        res = requests.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=15)
-        if res.status_code == 200:
-            raw = res.json()
-            valid = []
-            for offer in raw.get('data', {}).get('flightOffers', []):
-                l_sum, is_ci = [], True
-                for seg in offer.get('segments', []):
-                    car = seg.get('legs', [{}])[0].get('flightInfo', {}).get('carrierInfo', {}).get('operatingCarrier') or '??'
-                    if car != "CI": is_ci = False; break
-                    l_sum.append(f"{car}{seg.get('legs', [{}])[0].get('flightInfo', {}).get('flightNumber', '')}")
-                if is_ci and len(l_sum) == (4 if h1 else 2):
-                    valid.append({"total": offer.get('priceBreakdown', {}).get('total', {}).get('units', 0), "legs": l_sum, "h1": h1, "h4": h4, "d1": d1, "d4": d4})
-            if valid: return sorted(valid, key=lambda x: x['total'])[0]
-    except: pass
+    
+    for attempt in range(3):
+        try:
+            res = requests.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cabin, "adults": "1", "currency_code": "TWD"}, timeout=15)
+            rem = res.headers.get('x-ratelimit-requests-remaining')
+            if rem: st.session_state.quota_remaining = rem
+            
+            if res.status_code == 200:
+                raw = res.json()
+                valid = []
+                for offer in raw.get('data', {}).get('flightOffers', []):
+                    l_sum, is_ci = [], True
+                    for seg in offer.get('segments', []):
+                        car = seg.get('legs', [{}])[0].get('flightInfo', {}).get('carrierInfo', {}).get('operatingCarrier') or '??'
+                        if car != "CI": is_ci = False; break
+                        l_sum.append(f"{car}{seg.get('legs', [{}])[0].get('flightInfo', {}).get('flightNumber', '')}")
+                    if is_ci and len(l_sum) == (4 if h1 else 2):
+                        valid.append({"total": offer.get('priceBreakdown', {}).get('total', {}).get('units', 0), "legs": l_sum, "h1": h1, "h4": h4, "d1": d1, "d4": d4})
+                if valid: return sorted(valid, key=lambda x: x['total'])[0]
+                return None 
+            elif res.status_code == 429:
+                time.sleep(1.5)
+                continue
+            elif res.status_code == 403:
+                return "QUOTA_EXCEEDED"
+        except:
+            time.sleep(1)
+            continue
     return None
 
 # ==========================================
 # 2. UI 面板
 # ==========================================
-st.markdown('<p class="custom-title">⚡ ULTRA X-RAY EXPLORER</p>', unsafe_allow_html=True)
-st.markdown(f'<div class="quota-box">🏎️ <b>極限探索模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
+st.markdown('<p class="custom-title">⚡ ULTRA SMART-AUTO RADAR</p>', unsafe_allow_html=True)
+st.markdown(f'<div class="quota-box">🤖 <b>智慧變速模式：</b> 額度 {st.session_state.quota_remaining} | 🎯 基準：{st.session_state.ref_price:,} TWD</div>', unsafe_allow_html=True)
 
 with st.container():
     st.subheader("📌 核心行程 (D2 / D3)")
@@ -171,7 +171,7 @@ with st.container():
     c1, c2 = st.columns(2)
     if "來回" in st.session_state.input_trip_type:
         with c1: 
-            st.selectbox("🛫 核心起點 (TPE)", ALL_FORMATTED_CITIES, index=0, key="input_base_org")
+            st.selectbox("🛫 核心起點", ALL_FORMATTED_CITIES, index=0, key="input_base_org")
             st.date_input("D2 日期", value=date(2026, 6, 11), key="input_d2_dt")
         with c2:
             st.selectbox("🛬 核心終點", ALL_FORMATTED_CITIES, index=5, key="input_base_dst")
@@ -190,8 +190,7 @@ with st.container():
         d2_o, d2_d, d3_o, d3_d = st.session_state.input_d2_o.split(" ")[0], st.session_state.input_d2_d.split(" ")[0], st.session_state.input_d3_o.split(" ")[0], st.session_state.input_d3_d.split(" ")[0]
 
     st.markdown("---")
-    st.subheader("🌍 外站雷達 (D1 / D4 支援開口行程)")
-    
+    st.subheader("🌍 外站雷達 (D1 / D4)")
     st.checkbox("👯 D4 站點庫自動帶入 D1", value=True, key="input_sync_ui")
     st.checkbox("🔒 嚴格限制：D1/D4 必須同站點進出", value=False, key="input_strict_match")
 
@@ -199,10 +198,10 @@ with st.container():
     with cr1:
         st.multiselect("D1 區域過濾", list(CI_GLOBAL_HUBS.keys()), key="input_d1_reg", on_change=on_region_change_d1)
         d1_opt = [f"{c} ({n})" for r in st.session_state.input_d1_reg for c, n in CI_GLOBAL_HUBS[r].items()] if st.session_state.input_d1_reg else ALL_FORMATTED_CITIES
-        st.multiselect("📍 D1 起點庫", d1_opt, key="input_d1_hubs")
+        st.multiselect("📍 D1 起點", d1_opt, key="input_d1_hubs")
         st.date_input("📅 D1 日期", value=(date(2026, 6, 10),), key="input_d1_dates")
     with cr4:
-        d4_hubs = st.session_state.input_d1_hubs if st.session_state.input_sync_ui else st.multiselect("📍 D4 終點庫", ALL_FORMATTED_CITIES, key="input_d4_hubs")
+        d4_hubs = st.session_state.input_d1_hubs if st.session_state.input_sync_ui else st.multiselect("📍 D4 終點", ALL_FORMATTED_CITIES, key="input_d4_hubs")
         st.date_input("📅 D4 日期", value=(date(2026, 6, 26),), key="input_d4_dates")
 
     st.markdown("---")
@@ -213,12 +212,12 @@ with st.container():
         st.checkbox("自動對標直飛價", value=True, key="input_auto_ref")
         st.number_input("手動基準預算", value=200000, key="input_manual_ref")
     with colB:
-        st.markdown("### 🛠️ 實驗室選項")
-        st.checkbox("👁️ 開啟透視模式：顯示所有結果 (包含比直飛貴的賠錢票)", value=False, key="input_show_all")
+        st.markdown("##### 🛠️ 進階選項")
+        st.checkbox("👁️ 開啟透視模式：顯示所有結果 (含賠錢票)", value=False, key="input_show_all")
 
-# --- 核心執行 ---
+# --- 核心執行 (智慧自適應降載) ---
 if not st.session_state.engine_running:
-    if st.button("🚀 啟動極限 HYPER-DRIVE 獵殺", use_container_width=True):
+    if st.button("🚀 啟動智慧自適應獵殺", use_container_width=True):
         d1_in, d4_in = st.session_state.input_d1_dates, st.session_state.input_d4_dates
         d1_s, d1_e = (d1_in[0], d1_in[-1]) if isinstance(d1_in, (list, tuple)) else (d1_in, d1_in)
         d4_s, d4_e = (d4_in[0], d4_in[-1]) if isinstance(d4_in, (list, tuple)) else (d4_in, d4_in)
@@ -229,7 +228,7 @@ if not st.session_state.engine_running:
                 direct_legs = [{"fromId": f"{d2_o}.AIRPORT", "toId": f"{d2_d}.AIRPORT", "date": st.session_state.input_d2_dt.strftime("%Y-%m-%d")},
                                {"fromId": f"{d3_o}.AIRPORT", "toId": f"{d3_d}.AIRPORT", "date": st.session_state.input_d3_dt.strftime("%Y-%m-%d")}]
                 res = fetch_booking_bundle(direct_legs, cab_map[st.session_state.input_cabin])
-                if res: final_ref = res['total']; st.session_state.ref_price = final_ref
+                if res and isinstance(res, dict): final_ref = res['total']; st.session_state.ref_price = final_ref
 
         d1_ts, d4_ts = [d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days+1)], [d4_s + timedelta(days=i) for i in range((d4_e-d4_s).days+1)]
         tasks = []
@@ -244,28 +243,50 @@ if not st.session_state.engine_running:
                              {"fromId": f"{d3_o}.AIRPORT", "toId": f"{d3_d}.AIRPORT", "date": st.session_state.input_d3_dt.strftime("%Y-%m-%d")}, 
                              {"fromId": f"{d3_d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                         tasks.append((l, cab_map[st.session_state.input_cabin], h1_r, h4_r, d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d"), final_ref))
+        
+        # 🤖 智慧變速箱邏輯
         if tasks:
+            total_t = len(tasks)
+            if total_t <= 100:
+                st.session_state.current_batch = total_t
+                st.session_state.current_workers = 60
+                st.session_state.engine_mode_name = "⚡ 3檔：星際躍遷 (全速)"
+            elif total_t <= 400:
+                st.session_state.current_batch = 100
+                st.session_state.current_workers = 40
+                st.session_state.engine_mode_name = "🚀 2檔：曲速巡航 (平衡)"
+            else:
+                st.session_state.current_batch = 60
+                st.session_state.current_workers = 20
+                st.session_state.engine_mode_name = "🛡️ 1檔：陣列防護 (穩態)"
+
             st.session_state.task_list, st.session_state.task_idx, st.session_state.valid_offers, st.session_state.engine_running = tasks, 0, [], True
             st.rerun()
 
 if st.session_state.engine_running:
-    total, curr, BATCH = len(st.session_state.task_list), st.session_state.task_idx, 300
-    st.progress(min(curr/total, 1.0), text=f"⚡ HYPER-DRIVE: {curr}/{total}")
+    total, curr = len(st.session_state.task_list), st.session_state.task_idx
+    BATCH = st.session_state.current_batch
+    WORKERS = st.session_state.current_workers
+    
+    st.progress(min(curr/total, 1.0), text=f"{st.session_state.engine_mode_name} | 進度: {curr}/{total} | 併發數: {WORKERS}")
     batch = st.session_state.task_list[curr : curr + BATCH]
-    with ThreadPoolExecutor(max_workers=60) as exe:
+    
+    with ThreadPoolExecutor(max_workers=WORKERS) as exe:
         futures = {exe.submit(fetch_booking_bundle, t[0], t[1], t[2], t[3], t[4], t[5]): t for t in batch}
         for f in as_completed(futures):
+            task = futures[f]
+            t_ref = task[6]
             res = f.result()
-            if res:
-                t_ref = batch[0][6]
-                # 🛡️ 關鍵邏輯：如果開啟透視模式，或是省下的錢大於等於 0，就保留
+            
+            if res == "QUOTA_EXCEEDED":
+                st.session_state.engine_running = False
+                st.error("🚨 Premium 額度用盡！"); st.stop()
+            elif res and isinstance(res, dict):
                 if st.session_state.input_show_all or (t_ref - res['total'] >= 0):
                     res['ref'] = t_ref
                     st.session_state.valid_offers.append(res)
     
     if curr + BATCH >= total:
-        # Email 依舊只發送，但如果是透視模式，這封信可能會很大
-        send_email_report(st.session_state.valid_offers, d2_o, d2_d, d3_o, d3_d, st.session_state.input_d2_dt, st.session_state.input_d3_dt, st.session_state.ref_price)
         st.session_state.engine_running = False; st.rerun()
     else: st.session_state.task_idx += BATCH; st.rerun()
 
@@ -282,18 +303,24 @@ if not st.session_state.engine_running and st.session_state.valid_offers:
     with tabs[0]:
         html = render_matrix_html(st.session_state.valid_offers, st.session_state.ref_price, "🌍 全球外站綜合矩陣")
         st.markdown(html, unsafe_allow_html=True)
+        st.markdown("---")
+        st.markdown("##### 📋 全球綜合排行 (前 50 名)")
+        for r in res[:50]:
+            h1_code, h4_code = r['h1'].split(' ')[0], r['h4'].split(' ')[0]
+            saving = r['ref'] - r['total']
+            status_str = f"🔥 省 {saving:,}" if saving >= 0 else f"📉 貴 {abs(saving):,}"
+            with st.expander(f"💰 {r['total']:,} | {status_str} ({h1_code} {r['d1']} ➔ {h4_code} {r['d4']})"):
+                st.write(f"航班：{' | '.join(r['legs'])}")
     
     for i, route_name in enumerate(all_routes):
         with tabs[i+1]:
             route_data = [r for r in st.session_state.valid_offers if f"{r['h1']} ➔ {r['h4']}" == route_name]
             html = render_matrix_html(route_data, st.session_state.ref_price, f"📍 {route_name} 專屬矩陣")
             st.markdown(html, unsafe_allow_html=True)
-            
             st.markdown("---")
-            st.subheader("📋 詳細航班")
+            st.markdown("##### 📋 詳細航班")
             for r in sorted(route_data, key=lambda x: x['total'])[:10]:
-                h1_code = r['h1'].split(' ')[0]
-                h4_code = r['h4'].split(' ')[0]
+                h1_code, h4_code = r['h1'].split(' ')[0], r['h4'].split(' ')[0]
                 saving = r['ref']-r['total']
                 status_str = f"🔥 省 {saving:,}" if saving >= 0 else f"📉 貴 {abs(saving):,}"
                 with st.expander(f"💰 {r['total']:,} | {status_str} ({h1_code} {r['d1']} ➔ {h4_code} {r['d4']})"):
