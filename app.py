@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v39.8 THERMAL", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v39.9 ULTIMATE", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -66,14 +66,12 @@ def generate_table_html(res, ref):
     rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{get_name(r['h1'])} ➔ {get_name(r['h4'])}</td><td>{r['d1']}/{r['d4']}</td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in res[:50]])
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead><tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>價差</th><th>路線</th><th>日期組合</th><th>航班明細</th></tr></thead><tbody>{rows}</tbody></table>"
 
-# 🎨 視覺大改版：色溫熱力圖 (Warm/Cold Diverging Colormap)
 def generate_matrix_html(res, ref, title):
     if not res: return ""
     d1_dates = sorted(list(set(r['d1'] for r in res)))
     d4_dates = sorted(list(set(r['d4'] for r in res)))
     matrix = {(r['d1'], r['d4']): r for r in res}
     
-    # 找出基準價兩端的最大極值，用於漸層比例計算
     diffs = [ref - r['total'] for r in res]
     max_save = max([0] + diffs)
     max_lose = abs(min([0] + diffs))
@@ -89,24 +87,20 @@ def generate_matrix_html(res, ref, title):
                 diff = ref - r['total']
                 
                 if diff > 0:
-                    # 省錢 (暖色：白色 -> 深紅)
                     ratio = diff / max_save if max_save > 0 else 0
                     r_val = 255
                     g_val = int(255 * (1 - ratio) + 50 * ratio)
                     b_val = int(255 * (1 - ratio) + 50 * ratio)
                 elif diff < 0:
-                    # 賠錢 (冷色：白色 -> 藍色)
                     ratio = abs(diff) / max_lose if max_lose > 0 else 0
                     r_val = int(255 * (1 - ratio) + 50 * ratio)
                     g_val = int(255 * (1 - ratio) + 120 * ratio)
                     b_val = 255
                 else:
-                    # 打平 (白色)
                     r_val, g_val, b_val = 255, 255, 255
                     
                 bg = f"rgba({r_val},{g_val},{b_val},0.85)"
                 
-                # 確保在白色背景附近時，字體會自動變深色以供辨識
                 luminance = 0.299 * r_val + 0.587 * g_val + 0.114 * b_val
                 text_color = "#000" if luminance > 160 else "#fff"
 
@@ -117,8 +111,7 @@ def generate_matrix_html(res, ref, title):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-# 🛡️ 通訊防護
-def send_detailed_email(res, ref, target_str, is_range, elapsed, dps, version="v39.8"):
+def send_detailed_email(res, ref, target_str, is_range, elapsed, dps, version="v39.9"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱帳密尚未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -133,7 +126,7 @@ def send_detailed_email(res, ref, target_str, is_range, elapsed, dps, version="v
         body = f"{header}{stats_html}<h3>📋 獲利神票榜 (Top 50)</h3>{generate_table_html(res, ref)}<hr><h3>📊 各站點專屬熱力圖</h3>"
         routes = sorted(list(set(f"{get_name(r['h1'])} ➔ {get_name(r['h4'])}" for r in res)))
         
-        max_maps = 3 if len(res) > 2000 else 10
+        max_maps = 1 if len(res) > 5000 else (3 if len(res) > 2000 else 10)
         for route_str in routes[:max_maps]:
             h1_code = route_str.split(" (")[0]
             h4_code = route_str.split(" ➔ ")[1].split(" (")[0]
@@ -172,7 +165,6 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
                     for o in offers:
                         l_sum = []
                         is_valid_airline = True
-                        
                         for seg in o.get('segments', []):
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
@@ -198,10 +190,10 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v39.8)")
+    st.header("⚙️ 獵殺控制台 (v39.9)")
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
     
-    ci_only = st.checkbox("🌸 華航限定 (直營/聯營)", value=True, help="打勾：僅保留華航執飛或聯營之航班\n取消：全球航空不限航空大亂鬥")
+    ci_only = st.checkbox("🌸 華航限定 (直營/聯營)", value=True)
     workers = st.slider("併發上限", 20, 100, 50)
     show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     
@@ -212,8 +204,9 @@ with st.sidebar:
     email_on = st.checkbox("完成後寄送報告", value=True)
     if st.button("🛑 停止任務"): st.session_state.run_id = None; st.rerun()
 
-final_ref_price = manual_ref_val if use_manual_ref else st.session_state.ref_price
-st.markdown(f"<div style='padding:10px;background:rgba(0,230,118,0.1);border-radius:8px;'>🎯 <b>當前對標基準價：</b> {final_ref_price:,} TWD {'(手動校準)' if use_manual_ref else '(自動抓取)'}</div>", unsafe_allow_html=True)
+# 初步顯示基準價（供使用者參考）
+display_initial_ref = manual_ref_val if use_manual_ref else st.session_state.ref_price
+st.markdown(f"<div style='padding:10px;background:rgba(0,230,118,0.1);border-radius:8px;'>🎯 <b>當前對標基準價：</b> {display_initial_ref:,} TWD {'(手動校準)' if use_manual_ref else '(自動抓取)'}</div>", unsafe_allow_html=True)
 
 trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
 c1, c2 = st.columns(2)
@@ -243,64 +236,72 @@ d4_r = cr4.date_input("D4 日期範圍", value=(date(2026, 6, 26),))
 # 4. 獵殺執行大腦
 # ==========================================
 async def start_hunt():
-    rid = str(uuid.uuid4()); st.session_state.run_id = rid
-    d1_s, d1_e = get_safe_dates(d1_r); d4_s, d4_e = get_safe_dates(d4_r)
-    d1_list = [d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days + 1)]
-    d4_list = [d4_s + timedelta(days=i) for i in range((d4_e-d4_s).days + 1)]
+    try:
+        rid = str(uuid.uuid4()); st.session_state.run_id = rid
+        d1_s, d1_e = get_safe_dates(d1_r); d4_s, d4_e = get_safe_dates(d4_r)
+        d1_list = [d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days + 1)]
+        d4_list = [d4_s + timedelta(days=i) for i in range((d4_e-d4_s).days + 1)]
 
-    tasks = []
-    for h1r, h4r, d1, d4 in product(d1_h, d4_h, d1_list, d4_list):
-        if d1 <= d2_dt and d4 >= d3_dt:
-            l = [{"fromId": f"{h1r[:3]}.AIRPORT", "toId": f"{d2o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
-                 {"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
-                 {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")},
-                 {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4r[:3]}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
-            tasks.append((l, cab, h1r[:3], h4r[:3], d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
+        tasks = []
+        for h1r, h4r, d1, d4 in product(d1_h, d4_h, d1_list, d4_list):
+            if d1 <= d2_dt and d4 >= d3_dt:
+                l = [{"fromId": f"{h1r[:3]}.AIRPORT", "toId": f"{d2o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
+                     {"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
+                     {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")},
+                     {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4r[:3]}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
+                tasks.append((l, cab, h1r[:3], h4r[:3], d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
-    if not tasks: st.warning("任務量為 0"); return
-    bar = st.progress(0); status = st.empty(); final_res = []
-    
-    async with httpx.AsyncClient(timeout=40.0) as client:
-        if not use_manual_ref:
-            ref_l = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
-                     {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")}]
-            ref_res = await fetch_api(client, asyncio.Semaphore(1), (ref_l, cab, d2o, d3d, d2_dt.strftime("%Y-%m-%d"), d3_dt.strftime("%Y-%m-%d")), rid, ci_only)
-            if ref_res: st.session_state.ref_price = ref_res['total']
-
-        sem = asyncio.Semaphore(workers)
-        total_start_time = time.time()
-        coros = [fetch_api(client, sem, t, rid, ci_only) for t in tasks]
+        if not tasks: st.warning("任務量為 0"); return
+        bar = st.progress(0); status = st.empty(); final_res = []
         
-        for i, coro in enumerate(asyncio.as_completed(coros)):
-            if st.session_state.run_id != rid: return
-            r = await coro
-            
-            if r and (show_all or (final_ref_price - r['total'] >= 0)): final_res.append(r)
-            
-            elapsed_now = time.time() - total_start_time
-            rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
-            bar.progress((i+1)/len(tasks), text=f"⚡ 獵殺中: {i+1}/{len(tasks)} | 速時: {rps:.1f} RPS | 鎖定: {len(final_res)}")
+        async with httpx.AsyncClient(timeout=40.0) as client:
+            if not use_manual_ref:
+                ref_l = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
+                         {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")}]
+                ref_res = await fetch_api(client, asyncio.Semaphore(1), (ref_l, cab, d2o, d3d, d2_dt.strftime("%Y-%m-%d"), d3_dt.strftime("%Y-%m-%d")), rid, ci_only)
+                if ref_res: st.session_state.ref_price = ref_res['total']
 
-        total_elapsed = time.time() - total_start_time
-        final_rps = len(tasks) / total_elapsed if total_elapsed > 0 else 0
-        st.session_state.perf_stats = {"time": total_elapsed, "dps": final_rps}
+            # 🛠️ 核心修復1：動態抓取最新基準價，解決透視模式閉包 Bug
+            current_ref_price = manual_ref_val if use_manual_ref else st.session_state.ref_price
 
-    st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
-    is_range = len(d1_list) > 1 or len(d4_list) > 1
-    
-    if email_on and st.session_state.valid_offers:
-        status.info("📧 正在封裝報表並發送 Email (資料量大時需時較長)...")
-        is_success, err_msg = send_detailed_email(st.session_state.valid_offers, final_ref_price, f"{d2o}➔{d2d}", is_range, total_elapsed, final_rps)
-        if is_success:
-            status.success("📧 獵殺完成！已成功寄送 Email 報告。")
+            sem = asyncio.Semaphore(workers)
+            total_start_time = time.time()
+            coros = [fetch_api(client, sem, t, rid, ci_only) for t in tasks]
+            
+            for i, coro in enumerate(asyncio.as_completed(coros)):
+                if st.session_state.run_id != rid: return
+                r = await coro
+                
+                # 使用最新抓取到的基準價做比對
+                if r and (show_all or (current_ref_price - r['total'] >= 0)): final_res.append(r)
+                
+                elapsed_now = time.time() - total_start_time
+                rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
+                bar.progress((i+1)/len(tasks), text=f"⚡ 獵殺中: {i+1}/{len(tasks)} | 速時: {rps:.1f} RPS | 鎖定: {len(final_res)}")
+
+            total_elapsed = time.time() - total_start_time
+            final_rps = len(tasks) / total_elapsed if total_elapsed > 0 else 0
+            st.session_state.perf_stats = {"time": total_elapsed, "dps": final_rps}
+
+        st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
+        is_range = len(d1_list) > 1 or len(d4_list) > 1
+        
+        if email_on and st.session_state.valid_offers:
+            status.info("📧 正在封裝報表並發送 Email (資料量大時需時較長)...")
+            is_success, err_msg = send_detailed_email(st.session_state.valid_offers, current_ref_price, f"{d2o}➔{d2d}", is_range, total_elapsed, final_rps)
+            if is_success:
+                st.success("📧 獵殺完成！已成功寄送 Email 報告。")
+            else:
+                # 🛠️ 核心修復2：真實錯誤訊息會穩穩留在畫面上
+                st.error(f"🚨 Email 寄送失敗！請截圖此錯誤: {err_msg}")
         else:
-            status.error(f"🚨 Email 寄送失敗！原因: {err_msg}")
-    else:
-        status.success("🎯 獵殺完成！")
-        
-    st.session_state.run_id = None; st.rerun()
+            st.success("🎯 獵殺完成！")
+            
+    finally:
+        # 🛠️ 核心修復3：強制釋放鎖定，保證按鈕隨按隨用
+        st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v39.8 THERMAL)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v39.9 ULTIMATE)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
@@ -309,6 +310,9 @@ if st.button("🚀 啟動極速獵殺 (v39.8 THERMAL)", use_container_width=True
 # ==========================================
 if st.session_state.valid_offers:
     st.markdown("---")
+    
+    # 確保 UI 顯示的價差也是最新的
+    display_ref_price = manual_ref_val if use_manual_ref else st.session_state.ref_price
     
     p_time = st.session_state.perf_stats.get('time', 0)
     p_dps = st.session_state.perf_stats.get('dps', 0)
@@ -326,7 +330,7 @@ if st.session_state.valid_offers:
     with t1:
         df = pd.DataFrame([{
             "總價 (TWD)": f"{r['total']:,}", 
-            "獲利": f"{final_ref_price-r['total']:,}",
+            "獲利": f"{display_ref_price-r['total']:,}",
             "路線": f"{get_name(r['h1'])} ➔ {get_name(r['h4'])}", 
             "日期組合": f"{r['d1']}~{r['d4']}", 
             "航班": " | ".join(r['legs'])
@@ -341,4 +345,4 @@ if st.session_state.valid_offers:
             for route_key in routes:
                 h1_c, h4_c = route_key.split(" ➔ ")
                 route_data = [r for r in st.session_state.valid_offers if r['h1'] == h1_c and r['h4'] == h4_c]
-                st.markdown(generate_matrix_html(route_data, final_ref_price, f"組合分析：{get_name(h1_c)} ➔ {get_name(h4_c)}"), unsafe_allow_html=True)
+                st.markdown(generate_matrix_html(route_data, display_ref_price, f"組合分析：{get_name(h1_c)} ➔ {get_name(h4_c)}"), unsafe_allow_html=True)
