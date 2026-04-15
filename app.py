@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v39.7 THERMAL", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v39.8 THERMAL", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -66,45 +66,59 @@ def generate_table_html(res, ref):
     rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{get_name(r['h1'])} ➔ {get_name(r['h4'])}</td><td>{r['d1']}/{r['d4']}</td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in res[:50]])
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead><tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>價差</th><th>路線</th><th>日期組合</th><th>航班明細</th></tr></thead><tbody>{rows}</tbody></table>"
 
-# 🎨 視覺大改版：紅藍熱力圖 + Y軸修復
+# 🎨 視覺大改版：色溫熱力圖 (Warm/Cold Diverging Colormap)
 def generate_matrix_html(res, ref, title):
     if not res: return ""
     d1_dates = sorted(list(set(r['d1'] for r in res)))
     d4_dates = sorted(list(set(r['d4'] for r in res)))
     matrix = {(r['d1'], r['d4']): r for r in res}
     
-    # 計算價差區間，用來分配紅藍比例
+    # 找出基準價兩端的最大極值，用於漸層比例計算
     diffs = [ref - r['total'] for r in res]
-    mi_diff, ma_diff = min(diffs), max(diffs)
+    max_save = max([0] + diffs)
+    max_lose = abs(min([0] + diffs))
     
     h = [f"<h4 style='margin-bottom:5px; color:#2c3e50;'>📍 {title}</h4><table border='1' style='border-collapse:collapse;font-size:11px;text-align:center;margin-bottom:15px;'>"]
     h.append("<tr style='background:#333;color:#fff;'><th>D4↘\\D1➡</th>" + "".join([f"<th>{d[5:]}</th>" for d in d1_dates]) + "</tr>")
     
     for d4 in d4_dates:
-        # 🛠️ 修復 Y 軸：強制黑字白底，確保深色模式看得見
         row = [f"<tr><td style='background:#f2f2f2; color:#000; font-weight:bold;'>{d4[5:]}</td>" ]
         for d1 in d1_dates:
             r = matrix.get((d1, d4))
             if r:
                 diff = ref - r['total']
-                # 計算紅藍比例：1.0(最紅/省最多) -> 0.0(最藍/省最少)
-                ratio = 0.5 if ma_diff == mi_diff else (diff - mi_diff) / (ma_diff - mi_diff)
                 
-                r_val = int(30 + (220 - 30) * ratio)
-                g_val = int(144 + (20 - 144) * ratio)
-                b_val = int(255 + (60 - 255) * ratio)
+                if diff > 0:
+                    # 省錢 (暖色：白色 -> 深紅)
+                    ratio = diff / max_save if max_save > 0 else 0
+                    r_val = 255
+                    g_val = int(255 * (1 - ratio) + 50 * ratio)
+                    b_val = int(255 * (1 - ratio) + 50 * ratio)
+                elif diff < 0:
+                    # 賠錢 (冷色：白色 -> 藍色)
+                    ratio = abs(diff) / max_lose if max_lose > 0 else 0
+                    r_val = int(255 * (1 - ratio) + 50 * ratio)
+                    g_val = int(255 * (1 - ratio) + 120 * ratio)
+                    b_val = 255
+                else:
+                    # 打平 (白色)
+                    r_val, g_val, b_val = 255, 255, 255
+                    
                 bg = f"rgba({r_val},{g_val},{b_val},0.85)"
                 
-                # 🛠️ 修復內文：統一使用純白字體，不再使用紅字
-                row.append(f"<td style='background:{bg};padding:5px;color:#fff;'><b>{r['total']:,}</b><br><span style='color:#fff;'>{'省' if diff>=0 else '貴'}{abs(diff):,}</span></td>")
+                # 確保在白色背景附近時，字體會自動變深色以供辨識
+                luminance = 0.299 * r_val + 0.587 * g_val + 0.114 * b_val
+                text_color = "#000" if luminance > 160 else "#fff"
+
+                row.append(f"<td style='background:{bg};padding:5px;color:{text_color};'><b>{r['total']:,}</b><br><span style='color:{text_color};'>{'省' if diff>=0 else '貴'}{abs(diff):,}</span></td>")
             else: 
                 row.append("<td style='color:#888;'>-</td>")
         row.append("</tr>")
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-# 🛡️ 通訊防護：解除靜默，回傳真實錯誤
-def send_detailed_email(res, ref, target_str, is_range, elapsed, dps, version="v39.7"):
+# 🛡️ 通訊防護
+def send_detailed_email(res, ref, target_str, is_range, elapsed, dps, version="v39.8"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱帳密尚未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -184,7 +198,7 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v39.7)")
+    st.header("⚙️ 獵殺控制台 (v39.8)")
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
     
     ci_only = st.checkbox("🌸 華航限定 (直營/聯營)", value=True, help="打勾：僅保留華航執飛或聯營之航班\n取消：全球航空不限航空大亂鬥")
@@ -275,20 +289,18 @@ async def start_hunt():
     is_range = len(d1_list) > 1 or len(d4_list) > 1
     
     if email_on and st.session_state.valid_offers:
-        status.info("📧 正在封裝報表並發送 Email (請稍候)...")
-        # 取得發送結果
+        status.info("📧 正在封裝報表並發送 Email (資料量大時需時較長)...")
         is_success, err_msg = send_detailed_email(st.session_state.valid_offers, final_ref_price, f"{d2o}➔{d2d}", is_range, total_elapsed, final_rps)
         if is_success:
             status.success("📧 獵殺完成！已成功寄送 Email 報告。")
         else:
-            # 🚨 真正的錯誤現在會印出來給你看
-            status.error(f"🚨 Email 寄送失敗！原因: {err_msg} (請檢查 Streamlit Secrets 或 Gmail 應用程式密碼設定)")
+            status.error(f"🚨 Email 寄送失敗！原因: {err_msg}")
     else:
         status.success("🎯 獵殺完成！")
         
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺 (v39.7 THERMAL)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v39.8 THERMAL)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
