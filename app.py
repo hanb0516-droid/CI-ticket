@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v39.9 ULTIMATE", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v40.0 ULTIMATE", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -66,6 +66,7 @@ def generate_table_html(res, ref):
     rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{get_name(r['h1'])} ➔ {get_name(r['h4'])}</td><td>{r['d1']}/{r['d4']}</td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in res[:50]])
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead><tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>價差</th><th>路線</th><th>日期組合</th><th>航班明細</th></tr></thead><tbody>{rows}</tbody></table>"
 
+# 🎨 視覺大改版：色溫熱力圖 (Warm/Cold Diverging Colormap)
 def generate_matrix_html(res, ref, title):
     if not res: return ""
     d1_dates = sorted(list(set(r['d1'] for r in res)))
@@ -111,7 +112,7 @@ def generate_matrix_html(res, ref, title):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, target_str, is_range, elapsed, dps, version="v39.9"):
+def send_detailed_email(res, ref, target_str, is_range, elapsed, dps, version="v40.0"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱帳密尚未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -190,7 +191,7 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v39.9)")
+    st.header("⚙️ 獵殺控制台 (v40.0)")
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
     
     ci_only = st.checkbox("🌸 華航限定 (直營/聯營)", value=True)
@@ -204,7 +205,6 @@ with st.sidebar:
     email_on = st.checkbox("完成後寄送報告", value=True)
     if st.button("🛑 停止任務"): st.session_state.run_id = None; st.rerun()
 
-# 初步顯示基準價（供使用者參考）
 display_initial_ref = manual_ref_val if use_manual_ref else st.session_state.ref_price
 st.markdown(f"<div style='padding:10px;background:rgba(0,230,118,0.1);border-radius:8px;'>🎯 <b>當前對標基準價：</b> {display_initial_ref:,} TWD {'(手動校準)' if use_manual_ref else '(自動抓取)'}</div>", unsafe_allow_html=True)
 
@@ -222,15 +222,22 @@ else:
     d2o, d2d, d3o, d3d = d2os.split(" ")[0], d2ds.split(" ")[0], d3os.split(" ")[0], d3ds.split(" ")[0]
 
 st.markdown("---")
+# 🛠️ 補回 D4 同步 D1 開關
+sync = st.checkbox("👯 D4 同步 D1 選擇", value=True)
+
 cr1, cr4 = st.columns(2)
-regs = cr1.multiselect("區域快速過濾", list(CI_HUBS.keys()))
-flt_opts = [f"{c} ({n})" for r in regs for c, n in CI_HUBS[r].items()] if regs else ALL_CITIES
-d1_key = f"d1_sel_{hash(tuple(regs))}"
-curr_d1 = st.session_state.get(d1_key, flt_opts if regs else [])
-d1_h = cr1.multiselect(f"📍 D1 起點站 ({len(curr_d1)})", options=flt_opts, default=flt_opts if regs else None, key=d1_key)
-d1_r = cr1.date_input("D1 日期範圍", value=(date(2026, 6, 10),))
-d4_h = cr4.multiselect("📍 D4 終點站", options=flt_opts, default=flt_opts if regs else None)
-d4_r = cr4.date_input("D4 日期範圍", value=(date(2026, 6, 26),))
+with cr1:
+    regs = st.multiselect("區域快速過濾", list(CI_HUBS.keys()))
+    flt_opts = [f"{c} ({n})" for r in regs for c, n in CI_HUBS[r].items()] if regs else ALL_CITIES
+    d1_key = f"d1_sel_{hash(tuple(regs))}"
+    curr_d1 = st.session_state.get(d1_key, flt_opts if regs else [])
+    d1_h = st.multiselect(f"📍 D1 起點站 ({len(curr_d1)})", options=flt_opts, default=flt_opts if regs else None, key=d1_key)
+    d1_r = st.date_input("D1 日期範圍", value=(date(2026, 6, 10),))
+
+with cr4:
+    # 🛠️ D4 動態鎖定
+    d4_h = d1_h if sync else st.multiselect("📍 D4 終點站", options=flt_opts, default=flt_opts if regs else None)
+    d4_r = st.date_input("D4 日期範圍", value=(date(2026, 6, 26),))
 
 # ==========================================
 # 4. 獵殺執行大腦
@@ -251,7 +258,8 @@ async def start_hunt():
                      {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4r[:3]}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                 tasks.append((l, cab, h1r[:3], h4r[:3], d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
-        if not tasks: st.warning("任務量為 0"); return
+        total_tasks = len(tasks)
+        if total_tasks == 0: st.warning("任務量為 0"); return
         bar = st.progress(0); status = st.empty(); final_res = []
         
         async with httpx.AsyncClient(timeout=40.0) as client:
@@ -261,26 +269,36 @@ async def start_hunt():
                 ref_res = await fetch_api(client, asyncio.Semaphore(1), (ref_l, cab, d2o, d3d, d2_dt.strftime("%Y-%m-%d"), d3_dt.strftime("%Y-%m-%d")), rid, ci_only)
                 if ref_res: st.session_state.ref_price = ref_res['total']
 
-            # 🛠️ 核心修復1：動態抓取最新基準價，解決透視模式閉包 Bug
             current_ref_price = manual_ref_val if use_manual_ref else st.session_state.ref_price
 
             sem = asyncio.Semaphore(workers)
             total_start_time = time.time()
+            last_update_time = 0
+            
             coros = [fetch_api(client, sem, t, rid, ci_only) for t in tasks]
             
             for i, coro in enumerate(asyncio.as_completed(coros)):
                 if st.session_state.run_id != rid: return
                 r = await coro
                 
-                # 使用最新抓取到的基準價做比對
                 if r and (show_all or (current_ref_price - r['total'] >= 0)): final_res.append(r)
                 
-                elapsed_now = time.time() - total_start_time
-                rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
-                bar.progress((i+1)/len(tasks), text=f"⚡ 獵殺中: {i+1}/{len(tasks)} | 速時: {rps:.1f} RPS | 鎖定: {len(final_res)}")
+                # 🛠️ 效能節流閥：每 2.0 秒才更新一次畫面，附帶百分比與 ETA
+                current_time = time.time()
+                if current_time - last_update_time >= 2.0 or i == total_tasks - 1:
+                    elapsed_now = current_time - total_start_time
+                    rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
+                    pct = (i+1) / total_tasks * 100
+                    
+                    rem_tasks = total_tasks - (i+1)
+                    eta_s = rem_tasks / rps if rps > 0 else 0
+                    eta_str = f"{int(eta_s//60)}分{int(eta_s%60)}秒"
+                    
+                    bar.progress((i+1)/total_tasks, text=f"⚡ 獵殺中: {i+1}/{total_tasks} ({pct:.1f}%) | 速時: {rps:.1f} RPS | 預估剩餘: {eta_str} | 鎖定: {len(final_res)}")
+                    last_update_time = current_time
 
             total_elapsed = time.time() - total_start_time
-            final_rps = len(tasks) / total_elapsed if total_elapsed > 0 else 0
+            final_rps = total_tasks / total_elapsed if total_elapsed > 0 else 0
             st.session_state.perf_stats = {"time": total_elapsed, "dps": final_rps}
 
         st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
@@ -292,16 +310,14 @@ async def start_hunt():
             if is_success:
                 st.success("📧 獵殺完成！已成功寄送 Email 報告。")
             else:
-                # 🛠️ 核心修復2：真實錯誤訊息會穩穩留在畫面上
                 st.error(f"🚨 Email 寄送失敗！請截圖此錯誤: {err_msg}")
         else:
             st.success("🎯 獵殺完成！")
             
     finally:
-        # 🛠️ 核心修復3：強制釋放鎖定，保證按鈕隨按隨用
         st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v39.9 ULTIMATE)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v40.0 ULTIMATE)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
@@ -311,7 +327,6 @@ if st.button("🚀 啟動極速獵殺 (v39.9 ULTIMATE)", use_container_width=Tru
 if st.session_state.valid_offers:
     st.markdown("---")
     
-    # 確保 UI 顯示的價差也是最新的
     display_ref_price = manual_ref_val if use_manual_ref else st.session_state.ref_price
     
     p_time = st.session_state.perf_stats.get('time', 0)
