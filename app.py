@@ -13,9 +13,9 @@ from datetime import datetime, timedelta, date
 from itertools import product
 
 # ==========================================
-# 0. 初始化與靜態快取 (v38.4 核心)
+# 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v39.2 CALIBRATED", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v39.3 STABLE", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -48,6 +48,7 @@ S_SENDER, S_PWD, S_RECEIVER = st.secrets.get("EMAIL_SENDER", ""), st.secrets.get
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 if "run_id" not in st.session_state: st.session_state.run_id = None
 if "ref_price" not in st.session_state: st.session_state.ref_price = 200000
+if "perf_stats" not in st.session_state: st.session_state.perf_stats = {"time": 0, "dps": 0}
 
 # ==========================================
 # 1. 核心工具函數
@@ -65,13 +66,16 @@ def generate_table_html(res, ref):
     rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{get_name(r['h1'])} ➔ {get_name(r['h4'])}</td><td>{r['d1']}/{r['d4']}</td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in res[:50]])
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead><tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>價差</th><th>路線</th><th>日期組合</th><th>航班明細</th></tr></thead><tbody>{rows}</tbody></table>"
 
-def send_detailed_email(res, ref, target_str, version="v39.2"):
+def send_detailed_email(res, ref, target_str, elapsed, dps, version="v39.3"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
     msg['Subject'] = f"✈️ [{version}] {target_str} 報告 (最低 {res[0]['total']:,} TWD)"
-    header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>版本：{version}</h2><p>時間：{now_str} | 基準價：{ref:,} TWD</p></div>"
-    body = f"{header}<h3>📋 獲利神票榜</h3>{generate_table_html(res, ref)}"
+    
+    header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>版本：{version}</h2><p>時間：{now_str}</p></div>"
+    stats_html = f"<div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px; color:#333;'><b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br><b>⚡ 平均 DPS (RPS)：</b> {dps:.2f} 筆/秒<br><b>🎯 直飛基準價：</b> {ref:,} TWD</div>"
+    
+    body = f"{header}{stats_html}<h3>📋 獲利神票榜</h3>{generate_table_html(res, ref)}"
     msg.attach(MIMEText(f"<html><body>{body}</body></html>", 'html', 'utf-8'))
     try:
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
@@ -108,11 +112,10 @@ async def fetch_api(client, sem, task_data, rid):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v39.2)")
+    st.header("⚙️ 獵殺控制台 (v39.3)")
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
     workers = st.slider("併發上限", 20, 100, 50)
     
-    # 🛠️ 新增功能：手動基準價校準
     st.divider()
     use_manual_ref = st.checkbox("🛠️ 使用手動基準價", value=False)
     manual_ref_val = st.number_input("輸入官網直飛價 (TWD)", value=int(st.session_state.ref_price), step=1000)
@@ -120,12 +123,9 @@ with st.sidebar:
     email_on = st.checkbox("完成後寄送報告", value=True)
     if st.button("🛑 停止任務"): st.session_state.run_id = None; st.rerun()
 
-# 決定最終使用的基準價
 final_ref_price = manual_ref_val if use_manual_ref else st.session_state.ref_price
-
 st.markdown(f"<div style='padding:10px;background:rgba(0,230,118,0.1);border-radius:8px;'>🎯 <b>當前對標基準價：</b> {final_ref_price:,} TWD {'(手動校準)' if use_manual_ref else '(自動抓取)'}</div>", unsafe_allow_html=True)
 
-# 行程與日期設定
 trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
 c1, c2 = st.columns(2)
 if trip_mode == "來回":
@@ -172,7 +172,6 @@ async def start_hunt():
     bar = st.progress(0); final_res = []
     
     async with httpx.AsyncClient(timeout=40.0) as client:
-        # 如果沒開手動校準，則自動抓基準
         if not use_manual_ref:
             ref_l = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
                      {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")}]
@@ -180,19 +179,28 @@ async def start_hunt():
             if ref_res: st.session_state.ref_price = ref_res['total']
 
         sem = asyncio.Semaphore(workers)
+        total_start_time = time.time()
         coros = [fetch_api(client, sem, t, rid) for t in tasks]
+        
         for i, coro in enumerate(asyncio.as_completed(coros)):
             if st.session_state.run_id != rid: return
             r = await coro
             if r: final_res.append(r)
-            bar.progress((i+1)/len(tasks), text=f"⚡ 獵殺中: {i+1}/{len(tasks)} | 鎖定: {len(final_res)}")
+            
+            elapsed_now = time.time() - total_start_time
+            rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
+            bar.progress((i+1)/len(tasks), text=f"⚡ 獵殺中: {i+1}/{len(tasks)} | 速時: {rps:.1f} RPS | 鎖定: {len(final_res)}")
+
+        total_elapsed = time.time() - total_start_time
+        final_rps = len(tasks) / total_elapsed if total_elapsed > 0 else 0
+        st.session_state.perf_stats = {"time": total_elapsed, "dps": final_rps}
 
     st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
     if email_on and st.session_state.valid_offers:
-        send_detailed_email(st.session_state.valid_offers, final_ref_price, f"{d2o}➔{d2d}")
+        send_detailed_email(st.session_state.valid_offers, final_ref_price, f"{d2o}➔{d2d}", total_elapsed, final_rps)
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺 (v39.2 STABLE)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v39.3 STABLE)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
@@ -201,6 +209,18 @@ if st.button("🚀 啟動極速獵殺 (v39.2 STABLE)", use_container_width=True)
 # ==========================================
 if st.session_state.valid_offers:
     st.markdown("---")
+    
+    p_time = st.session_state.perf_stats.get('time', 0)
+    p_dps = st.session_state.perf_stats.get('dps', 0)
+    st.markdown(f"""
+    <div style='background:rgba(0, 230, 118, 0.1); padding:15px; border-radius:8px; border-left:5px solid #00e676; margin-bottom:20px;'>
+        <h4 style='margin:0 0 10px 0; color:#00e676;'>📊 任務執行報告</h4>
+        <b>⏱️ 總耗時：</b> <span style='color:#fff;'>{p_time:.2f} 秒</span> &nbsp;&nbsp;|&nbsp;&nbsp; 
+        <b>⚡ 平均 DPS (引擎時速)：</b> <span style='color:#fff;'>{p_dps:.2f} 筆/秒</span> &nbsp;&nbsp;|&nbsp;&nbsp;
+        <b>🏆 鎖定神票：</b> <span style='color:#fff;'>{len(st.session_state.valid_offers)} 組</span>
+    </div>
+    """, unsafe_allow_html=True)
+    
     df = pd.DataFrame([{
         "總價 (TWD)": f"{r['total']:,}", 
         "獲利": f"{final_ref_price-r['total']:,}",
