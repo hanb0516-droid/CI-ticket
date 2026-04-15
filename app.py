@@ -279,4 +279,15 @@ async def start_hunt():
                 if r and (show_all or (cur_ref - r['total'] >= 0)): final_res.append(r)
                 
                 now = time.time()
-                if now - last_upd >= 2.0 or
+                if now - last_upd >= 2.0 or i == total_tasks - 1:
+                    rps = (i+1)/(now - start_t) if (now - start_t) > 0 else 0
+                    eta = (total_tasks - (i+1)) / rps if rps > 0 else 0
+                    bar.progress((i+1)/total_tasks, text=f"⚡ {i+1}/{total_tasks} ({((i+1)/total_tasks*100):.1f}%) | {rps:.1f} RPS | 剩餘: {int(eta//60)}分{int(eta%60)}秒 | 鎖定: {len(final_res)}")
+                    last_upd = now
+
+            st.session_state.perf_stats = {"time": time.time() - start_t, "dps": total_tasks / (time.time() - start_t)}
+
+        st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
+        if email_on and st.session_state.valid_offers:
+            status.info("📧 正在封裝精算報表...")
+            ok, err = send_detailed_email(st.session_state.valid_offers, cur_ref, f"{d2o}➔{d2d}", d2_dt, d3_dt, st.session_state.perf
