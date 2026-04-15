@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v39.3 STABLE", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v39.5 AIRLINE", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -66,7 +66,30 @@ def generate_table_html(res, ref):
     rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{get_name(r['h1'])} ➔ {get_name(r['h4'])}</td><td>{r['d1']}/{r['d4']}</td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in res[:50]])
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead><tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>價差</th><th>路線</th><th>日期組合</th><th>航班明細</th></tr></thead><tbody>{rows}</tbody></table>"
 
-def send_detailed_email(res, ref, target_str, elapsed, dps, version="v39.3"):
+def generate_matrix_html(res, ref, title):
+    if not res: return ""
+    d1_dates = sorted(list(set(r['d1'] for r in res)))
+    d4_dates = sorted(list(set(r['d4'] for r in res)))
+    matrix = {(r['d1'], r['d4']): r for r in res}
+    prices = [r['total'] for r in res]
+    mi, ma = min(prices), max(prices)
+    h = [f"<h4 style='margin-bottom:5px; color:#2c3e50;'>📍 {title}</h4><table border='1' style='border-collapse:collapse;font-size:11px;text-align:center;margin-bottom:15px;'>"]
+    h.append("<tr style='background:#333;color:#fff;'><th>D4↘\\D1➡</th>" + "".join([f"<th>{d[5:]}</th>" for d in d1_dates]) + "</tr>")
+    for d4 in d4_dates:
+        row = [f"<tr><td style='background:#f2f2f2;font-weight:bold;'>{d4[5:]}</td>" ]
+        for d1 in d1_dates:
+            r = matrix.get((d1, d4))
+            if r:
+                diff = ref - r['total']
+                alpha = 0.8 if ma <= mi else 0.8 - 0.7*((r['total']-mi)/(ma-mi))
+                bg = f"rgba(0,230,118,{alpha:.2f})" if diff >= 0 else "rgba(255,182,193,0.4)"
+                row.append(f"<td style='background:{bg};padding:5px;'><b>{r['total']:,}</b><br><span style='color:{'#d32f2f' if diff>=0 else '#1976d2'}'>{'省' if diff>=0 else '貴'}{abs(diff):,}</span></td>")
+            else: row.append("<td style='color:#ccc;'>-</td>")
+        row.append("</tr>")
+        h.append("".join(row))
+    return "".join(h) + "</table>"
+
+def send_detailed_email(res, ref, target_str, is_range, elapsed, dps, version="v39.5"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -75,7 +98,17 @@ def send_detailed_email(res, ref, target_str, elapsed, dps, version="v39.3"):
     header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>版本：{version}</h2><p>時間：{now_str}</p></div>"
     stats_html = f"<div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px; color:#333;'><b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br><b>⚡ 平均 DPS (RPS)：</b> {dps:.2f} 筆/秒<br><b>🎯 直飛基準價：</b> {ref:,} TWD</div>"
     
-    body = f"{header}{stats_html}<h3>📋 獲利神票榜</h3>{generate_table_html(res, ref)}"
+    if not is_range:
+        body = f"{header}{stats_html}<h3>📋 獲利神票榜</h3>{generate_table_html(res, ref)}"
+    else:
+        body = f"{header}{stats_html}<h3>📋 獲利神票榜 (Top 50)</h3>{generate_table_html(res, ref)}<hr><h3>📊 各站點專屬熱力圖</h3>"
+        routes = sorted(list(set(f"{get_name(r['h1'])} ➔ {get_name(r['h4'])}" for r in res)))
+        for route_str in routes[:10]:
+            h1_code = route_str.split(" (")[0]
+            h4_code = route_str.split(" ➔ ")[1].split(" (")[0]
+            route_data = [r for r in res if r['h1'] == h1_code and r['h4'] == h4_code]
+            body += generate_matrix_html(route_data, ref, f"路線組合：{route_str}")
+
     msg.attach(MIMEText(f"<html><body>{body}</body></html>", 'html', 'utf-8'))
     try:
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
@@ -85,7 +118,7 @@ def send_detailed_email(res, ref, target_str, elapsed, dps, version="v39.3"):
 # ==========================================
 # 2. 異步引擎
 # ==========================================
-async def fetch_api(client, sem, task_data, rid):
+async def fetch_api(client, sem, task_data, rid, ci_only_flag):
     if st.session_state.run_id != rid: return None
     legs, cabin, h1, h4, d1, d4 = task_data
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
@@ -98,11 +131,29 @@ async def fetch_api(client, sem, task_data, rid):
                     raw = res.json()
                     offers = raw.get('data', {}).get('flightOffers', [])
                     if not offers: return None
+                    
                     valid = []
                     for o in offers:
-                        l_sum = [f"CI{l.get('flightInfo', {}).get('flightNumber', '')}" for s in o.get('segments', []) for l in s.get('legs', [])]
-                        p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
-                        valid.append({"total": p, "legs": l_sum, "h1": h1, "h4": h4, "d1": d1, "d4": d4})
+                        l_sum = []
+                        is_valid_airline = True
+                        
+                        for seg in o.get('segments', []):
+                            for leg in seg.get('legs', []):
+                                f = leg.get('flightInfo', {})
+                                c_info = f.get('carrierInfo', {})
+                                op = c_info.get('operatingCarrier', '')
+                                mk = c_info.get('marketingCarrier', '')
+                                
+                                # 🛠️ 華航限定邏輯：打勾時，只要有一段不是CI直營或聯營，整張票就不要
+                                if ci_only_flag and op != "CI" and mk != "CI":
+                                    is_valid_airline = False
+                                
+                                l_sum.append(f"{mk or op}{f.get('flightNumber', '')}")
+                        
+                        if is_valid_airline:
+                            p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
+                            valid.append({"total": p, "legs": l_sum, "h1": h1, "h4": h4, "d1": d1, "d4": d4})
+                            
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 elif res.status_code == 429: await asyncio.sleep(2.0)
             except: await asyncio.sleep(1.0)
@@ -112,9 +163,14 @@ async def fetch_api(client, sem, task_data, rid):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v39.3)")
+    st.header("⚙️ 獵殺控制台 (v39.5)")
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
+    
+    # 🛠️ 新增：華航限定開關
+    ci_only = st.checkbox("🌸 華航限定 (直營/聯營)", value=True, help="打勾：僅保留華航執飛或聯營之航班\n取消：全球航空不限航空大亂鬥")
+    
     workers = st.slider("併發上限", 20, 100, 50)
+    show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     
     st.divider()
     use_manual_ref = st.checkbox("🛠️ 使用手動基準價", value=False)
@@ -175,17 +231,18 @@ async def start_hunt():
         if not use_manual_ref:
             ref_l = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_dt.strftime("%Y-%m-%d")},
                      {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_dt.strftime("%Y-%m-%d")}]
-            ref_res = await fetch_api(client, asyncio.Semaphore(1), (ref_l, cab, d2o, d3d, d2_dt.strftime("%Y-%m-%d"), d3_dt.strftime("%Y-%m-%d")), rid)
+            ref_res = await fetch_api(client, asyncio.Semaphore(1), (ref_l, cab, d2o, d3d, d2_dt.strftime("%Y-%m-%d"), d3_dt.strftime("%Y-%m-%d")), rid, ci_only)
             if ref_res: st.session_state.ref_price = ref_res['total']
 
         sem = asyncio.Semaphore(workers)
         total_start_time = time.time()
-        coros = [fetch_api(client, sem, t, rid) for t in tasks]
+        coros = [fetch_api(client, sem, t, rid, ci_only) for t in tasks]
         
         for i, coro in enumerate(asyncio.as_completed(coros)):
             if st.session_state.run_id != rid: return
             r = await coro
-            if r: final_res.append(r)
+            
+            if r and (show_all or (final_ref_price - r['total'] >= 0)): final_res.append(r)
             
             elapsed_now = time.time() - total_start_time
             rps = (i+1)/elapsed_now if elapsed_now > 0 else 0
@@ -196,11 +253,12 @@ async def start_hunt():
         st.session_state.perf_stats = {"time": total_elapsed, "dps": final_rps}
 
     st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
+    is_range = len(d1_list) > 1 or len(d4_list) > 1
     if email_on and st.session_state.valid_offers:
-        send_detailed_email(st.session_state.valid_offers, final_ref_price, f"{d2o}➔{d2d}", total_elapsed, final_rps)
+        send_detailed_email(st.session_state.valid_offers, final_ref_price, f"{d2o}➔{d2d}", is_range, total_elapsed, final_rps)
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺 (v39.3 STABLE)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v39.5 STABLE)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
@@ -221,11 +279,24 @@ if st.session_state.valid_offers:
     </div>
     """, unsafe_allow_html=True)
     
-    df = pd.DataFrame([{
-        "總價 (TWD)": f"{r['total']:,}", 
-        "獲利": f"{final_ref_price-r['total']:,}",
-        "路線": f"{get_name(r['h1'])} ➔ {get_name(r['h4'])}", 
-        "日期組合": f"{r['d1']}~{r['d4']}", 
-        "航班": " | ".join(r['legs'])
-    } for r in st.session_state.valid_offers])
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    t1, t2 = st.tabs(["🏆 獲利神票榜", "📍 分站點矩陣"])
+    
+    with t1:
+        df = pd.DataFrame([{
+            "總價 (TWD)": f"{r['total']:,}", 
+            "獲利": f"{final_ref_price-r['total']:,}",
+            "路線": f"{get_name(r['h1'])} ➔ {get_name(r['h4'])}", 
+            "日期組合": f"{r['d1']}~{r['d4']}", 
+            "航班": " | ".join(r['legs'])
+        } for r in st.session_state.valid_offers])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        
+    with t2:
+        routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in st.session_state.valid_offers)))
+        if not routes:
+            st.info("無獲利矩陣資料")
+        else:
+            for route_key in routes:
+                h1_c, h4_c = route_key.split(" ➔ ")
+                route_data = [r for r in st.session_state.valid_offers if r['h1'] == h1_c and r['h4'] == h4_c]
+                st.markdown(generate_matrix_html(route_data, final_ref_price, f"組合分析：{get_name(h1_c)} ➔ {get_name(h4_c)}"), unsafe_allow_html=True)
