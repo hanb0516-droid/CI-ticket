@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v42.1 CORE JOURNEY", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v42.2 CORE JOURNEY", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -66,8 +66,8 @@ def get_name(code):
 
 def generate_table_html(res, ref, bbb_ref, limit=100):
     display_res = res[:limit]
-    # 🛠️ 欄位更名：總價 - D2/D3直飛 -> 比較核心旅程
-    rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{r['total'] - bbb_ref:,}</td><td>{get_name(r['h1'])} ➔ {get_name(r['h4'])}</td><td>{r['d1']}/{r['d4']}</td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in display_res])
+    # 🛠️ 欄位正負號格式化：加入 :+, 強制顯示正號
+    rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{r['total'] - bbb_ref:+,}</td><td>{get_name(r['h1'])} ➔ {get_name(r['h4'])}</td><td>{r['d1']}/{r['d4']}</td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in display_res])
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead><tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>獲利(雙基準)</th><th>比較核心旅程</th><th>路線</th><th>日期組合</th><th>航班明細</th></tr></thead><tbody>{rows}</tbody></table>"
 
 def generate_matrix_html(res, ref, title):
@@ -103,15 +103,13 @@ def generate_matrix_html(res, ref, title):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-# 🛠️ Email 主旨大幅動態化
-def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps, aaa, bbb, version="v42.1"):
+def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps, aaa, bbb, version="v42.2"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
     msg['From'] = S_SENDER
     msg['To'] = S_RECEIVER
     
-    # 🎯 構建動態主旨
     d2_s = d2_dt.strftime("%Y-%m-%d")
     d3_s = d3_dt.strftime("%Y-%m-%d")
     cheapest = res[0]['total']
@@ -182,7 +180,7 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v42.1)")
+    st.header("⚙️ 獵殺控制台 (v42.2)")
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
     ci_only = st.checkbox("🌸 華航限定 (直營/聯營)", value=True)
     workers = st.slider("併發上限", 20, 100, 50)
@@ -193,9 +191,8 @@ with st.sidebar:
     email_on = st.checkbox("寄送 Email 報告", value=True)
     if st.button("🛑 停止任務"): st.session_state.run_id = None; st.rerun()
 
-# 🎯 動態顯示基準價標題：對標 D1/D4(aaa) + D2/D3(bbb)
 if use_manual_ref:
-    st.markdown(f"<div style='padding:10px;background:rgba(0,230,118,0.1);border-radius:8px;'>🎯 <b>當前對標基準價：</b> {manual_ref_val:,} TWD (手動校準)</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='padding:10px;background:rgba(0,230,118,0.1);border-radius:8px;'>🎯 <b>當前對標基準價：</b> {manual_ref_val:,} TWD (手掌握校準)</div>", unsafe_allow_html=True)
 else:
     st.markdown(f"<div style='padding:10px;background:rgba(0,230,118,0.1);border-radius:8px;'>🎯 <b>當前對標基準價：</b> 接駁來回({st.session_state.ref_aaa:,}) + 核心旅程({st.session_state.ref_bbb:,}) = {st.session_state.ref_price:,} TWD</div>", unsafe_allow_html=True)
 
@@ -287,6 +284,8 @@ async def start_hunt():
             st.session_state.perf_stats = {"time": time.time() - start_t, "dps": total_tasks / (time.time() - start_t)}
 
         st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
+        is_range = len(d1_list) > 1 or len(d4_list) > 1
+        
         if email_on and st.session_state.valid_offers:
             status.info("📧 正在封裝精算報表...")
             ok, err = send_detailed_email(st.session_state.valid_offers, cur_ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, st.session_state.perf_stats['time'], st.session_state.perf_stats['dps'], st.session_state.ref_aaa, st.session_state.ref_bbb)
@@ -295,7 +294,7 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v42.1 精算版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v42.2 精算版)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
@@ -307,10 +306,11 @@ if st.session_state.valid_offers:
     
     t1, t2 = st.tabs(["🏆 獲利神票榜", "📍 分站點矩陣"])
     with t1:
+        # 🛠️ 數值格式化：使用 :+, 強制顯示正負號
         df = pd.DataFrame([{
             "總價 (TWD)": f"{r['total']:,}", 
-            "獲利 (雙基準)": f"{cur_ref-r['total']:,}", 
-            "比較核心旅程": f"{r['total'] - st.session_state.ref_bbb:,}", # 🛠️ 欄位更名
+            "獲利 (雙基準)": f"{cur_ref-r['total']:+,}", 
+            "比較核心旅程": f"{r['total'] - st.session_state.ref_bbb:+,}",
             "路線": f"{get_name(r['h1'])}➔{get_name(r['h4'])}", 
             "日期": f"{r['d1']}~{r['d4']}", 
             "航班": "|".join(r['legs'])
