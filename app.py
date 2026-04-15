@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v39.5 AIRLINE", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v39.7 THERMAL", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -66,54 +66,76 @@ def generate_table_html(res, ref):
     rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{get_name(r['h1'])} ➔ {get_name(r['h4'])}</td><td>{r['d1']}/{r['d4']}</td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in res[:50]])
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead><tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>價差</th><th>路線</th><th>日期組合</th><th>航班明細</th></tr></thead><tbody>{rows}</tbody></table>"
 
+# 🎨 視覺大改版：紅藍熱力圖 + Y軸修復
 def generate_matrix_html(res, ref, title):
     if not res: return ""
     d1_dates = sorted(list(set(r['d1'] for r in res)))
     d4_dates = sorted(list(set(r['d4'] for r in res)))
     matrix = {(r['d1'], r['d4']): r for r in res}
-    prices = [r['total'] for r in res]
-    mi, ma = min(prices), max(prices)
+    
+    # 計算價差區間，用來分配紅藍比例
+    diffs = [ref - r['total'] for r in res]
+    mi_diff, ma_diff = min(diffs), max(diffs)
+    
     h = [f"<h4 style='margin-bottom:5px; color:#2c3e50;'>📍 {title}</h4><table border='1' style='border-collapse:collapse;font-size:11px;text-align:center;margin-bottom:15px;'>"]
     h.append("<tr style='background:#333;color:#fff;'><th>D4↘\\D1➡</th>" + "".join([f"<th>{d[5:]}</th>" for d in d1_dates]) + "</tr>")
+    
     for d4 in d4_dates:
-        row = [f"<tr><td style='background:#f2f2f2;font-weight:bold;'>{d4[5:]}</td>" ]
+        # 🛠️ 修復 Y 軸：強制黑字白底，確保深色模式看得見
+        row = [f"<tr><td style='background:#f2f2f2; color:#000; font-weight:bold;'>{d4[5:]}</td>" ]
         for d1 in d1_dates:
             r = matrix.get((d1, d4))
             if r:
                 diff = ref - r['total']
-                alpha = 0.8 if ma <= mi else 0.8 - 0.7*((r['total']-mi)/(ma-mi))
-                bg = f"rgba(0,230,118,{alpha:.2f})" if diff >= 0 else "rgba(255,182,193,0.4)"
-                row.append(f"<td style='background:{bg};padding:5px;'><b>{r['total']:,}</b><br><span style='color:{'#d32f2f' if diff>=0 else '#1976d2'}'>{'省' if diff>=0 else '貴'}{abs(diff):,}</span></td>")
-            else: row.append("<td style='color:#ccc;'>-</td>")
+                # 計算紅藍比例：1.0(最紅/省最多) -> 0.0(最藍/省最少)
+                ratio = 0.5 if ma_diff == mi_diff else (diff - mi_diff) / (ma_diff - mi_diff)
+                
+                r_val = int(30 + (220 - 30) * ratio)
+                g_val = int(144 + (20 - 144) * ratio)
+                b_val = int(255 + (60 - 255) * ratio)
+                bg = f"rgba({r_val},{g_val},{b_val},0.85)"
+                
+                # 🛠️ 修復內文：統一使用純白字體，不再使用紅字
+                row.append(f"<td style='background:{bg};padding:5px;color:#fff;'><b>{r['total']:,}</b><br><span style='color:#fff;'>{'省' if diff>=0 else '貴'}{abs(diff):,}</span></td>")
+            else: 
+                row.append("<td style='color:#888;'>-</td>")
         row.append("</tr>")
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, target_str, is_range, elapsed, dps, version="v39.5"):
-    if not S_SENDER or not S_PWD or not S_RECEIVER: return
+# 🛡️ 通訊防護：解除靜默，回傳真實錯誤
+def send_detailed_email(res, ref, target_str, is_range, elapsed, dps, version="v39.7"):
+    if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱帳密尚未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
     msg['Subject'] = f"✈️ [{version}] {target_str} 報告 (最低 {res[0]['total']:,} TWD)"
     
     header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>版本：{version}</h2><p>時間：{now_str}</p></div>"
-    stats_html = f"<div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px; color:#333;'><b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br><b>⚡ 平均 DPS (RPS)：</b> {dps:.2f} 筆/秒<br><b>🎯 直飛基準價：</b> {ref:,} TWD</div>"
+    stats_html = f"<div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px; color:#333;'><b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br><b>⚡ 平均 DPS (RPS)：</b> {dps:.2f} 筆/秒<br><b>🎯 直飛基準價：</b> {ref:,} TWD<br><b>🏆 尋獲神票：</b> {len(res)} 組</div>"
     
     if not is_range:
         body = f"{header}{stats_html}<h3>📋 獲利神票榜</h3>{generate_table_html(res, ref)}"
     else:
         body = f"{header}{stats_html}<h3>📋 獲利神票榜 (Top 50)</h3>{generate_table_html(res, ref)}<hr><h3>📊 各站點專屬熱力圖</h3>"
         routes = sorted(list(set(f"{get_name(r['h1'])} ➔ {get_name(r['h4'])}" for r in res)))
-        for route_str in routes[:10]:
+        
+        max_maps = 3 if len(res) > 2000 else 10
+        for route_str in routes[:max_maps]:
             h1_code = route_str.split(" (")[0]
             h4_code = route_str.split(" ➔ ")[1].split(" (")[0]
             route_data = [r for r in res if r['h1'] == h1_code and r['h4'] == h4_code]
             body += generate_matrix_html(route_data, ref, f"路線組合：{route_str}")
+        
+        if len(routes) > max_maps:
+            body += f"<p style='color:#7f8c8d; font-size:12px; margin-top:15px;'>...為避免郵件檔案過大遭 Gmail 伺服器拒收，已自動隱藏其餘 {len(routes) - max_maps} 組熱力圖。請至系統網頁端查看完整數據。</p>"
 
     msg.attach(MIMEText(f"<html><body>{body}</body></html>", 'html', 'utf-8'))
     try:
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
             s.starttls(); s.login(S_SENDER, S_PWD); s.send_message(msg)
-    except: pass
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 # ==========================================
 # 2. 異步引擎
@@ -144,7 +166,6 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
                                 op = c_info.get('operatingCarrier', '')
                                 mk = c_info.get('marketingCarrier', '')
                                 
-                                # 🛠️ 華航限定邏輯：打勾時，只要有一段不是CI直營或聯營，整張票就不要
                                 if ci_only_flag and op != "CI" and mk != "CI":
                                     is_valid_airline = False
                                 
@@ -163,12 +184,10 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v39.5)")
+    st.header("⚙️ 獵殺控制台 (v39.7)")
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
     
-    # 🛠️ 新增：華航限定開關
     ci_only = st.checkbox("🌸 華航限定 (直營/聯營)", value=True, help="打勾：僅保留華航執飛或聯營之航班\n取消：全球航空不限航空大亂鬥")
-    
     workers = st.slider("併發上限", 20, 100, 50)
     show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     
@@ -225,7 +244,7 @@ async def start_hunt():
             tasks.append((l, cab, h1r[:3], h4r[:3], d1.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
     if not tasks: st.warning("任務量為 0"); return
-    bar = st.progress(0); final_res = []
+    bar = st.progress(0); status = st.empty(); final_res = []
     
     async with httpx.AsyncClient(timeout=40.0) as client:
         if not use_manual_ref:
@@ -254,11 +273,22 @@ async def start_hunt():
 
     st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
     is_range = len(d1_list) > 1 or len(d4_list) > 1
+    
     if email_on and st.session_state.valid_offers:
-        send_detailed_email(st.session_state.valid_offers, final_ref_price, f"{d2o}➔{d2d}", is_range, total_elapsed, final_rps)
+        status.info("📧 正在封裝報表並發送 Email (請稍候)...")
+        # 取得發送結果
+        is_success, err_msg = send_detailed_email(st.session_state.valid_offers, final_ref_price, f"{d2o}➔{d2d}", is_range, total_elapsed, final_rps)
+        if is_success:
+            status.success("📧 獵殺完成！已成功寄送 Email 報告。")
+        else:
+            # 🚨 真正的錯誤現在會印出來給你看
+            status.error(f"🚨 Email 寄送失敗！原因: {err_msg} (請檢查 Streamlit Secrets 或 Gmail 應用程式密碼設定)")
+    else:
+        status.success("🎯 獵殺完成！")
+        
     st.session_state.run_id = None; st.rerun()
 
-if st.button("🚀 啟動極速獵殺 (v39.5 STABLE)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v39.7 THERMAL)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
