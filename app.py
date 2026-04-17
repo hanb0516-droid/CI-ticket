@@ -15,11 +15,12 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v42.2 CORE JOURNEY", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v42.3 DYNAMIC HUBS", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
-    h = {
+    # 🌸 華航專屬航網 (精簡版)
+    ci_h = {
         "台灣": {"TPE": "台北桃園", "KHH": "高雄小港"},
         "港澳": {"HKG": "香港", "MFM": "澳門"},
         "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
@@ -28,15 +29,33 @@ def get_hubs():
         "北美洲": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "JFK": "紐約", "YVR": "溫哥華"},
         "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
     }
-    all_c = [f"{code} ({name})" for r, cities in h.items() for code, name in cities.items()]
-    flat_map = {code: name for r in h.values() for code, name in r.items()}
-    def f_idx(target):
-        for i, s in enumerate(all_c):
-            if s.startswith(target): return i
-        return 0
-    return h, all_c, flat_map, f_idx("TPE"), f_idx("PRG"), f_idx("FRA")
+    
+    # 🌍 全球大亂鬥航網 (擴充版，涵蓋各大外籍航空與國籍航空樞紐)
+    all_h = {
+        "台灣": {"TPE": "台北桃園", "KHH": "高雄小港", "RMQ": "台中清泉崗"},
+        "港澳": {"HKG": "香港", "MFM": "澳門"},
+        "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山", "CJJ": "清州", "HKD": "函館", "SDJ": "仙台"},
+        "東南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
+        "中東/中亞": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "DEL": "新德里"},
+        "西歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑"},
+        "東歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "布達佩斯"},
+        "南歐": {"FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納"},
+        "北歐": {"CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基"},
+        "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華"},
+        "美東/中部": {"JFK": "紐約", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多"},
+        "南美": {"GRU": "聖保羅", "EZE": "布宜諾斯艾利斯", "SCL": "聖地牙哥"},
+        "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭", "PER": "伯斯"}
+    }
+    
+    def flatten(h_dict): return [f"{code} ({name})" for r, cities in h_dict.items() for code, name in cities.items()]
+    
+    master_map = {}
+    for r, cities in all_h.items(): master_map.update(cities)
+    for r, cities in ci_h.items(): master_map.update(cities)
+    
+    return ci_h, flatten(ci_h), all_h, flatten(all_h), master_map
 
-CI_HUBS, ALL_CITIES, AIRPORT_MAP, IDX_TPE, IDX_PRG, IDX_FRA = get_hubs()
+CI_HUBS, CI_CITIES, ALL_HUBS, ALL_CITIES, AIRPORT_MAP = get_hubs()
 
 try:
     API_KEY = st.secrets["BOOKING_API_KEY"]
@@ -66,7 +85,6 @@ def get_name(code):
 
 def generate_table_html(res, ref, bbb_ref, limit=100):
     display_res = res[:limit]
-    # 🛠️ 欄位正負號格式化：加入 :+, 強制顯示正號
     rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{r['total'] - bbb_ref:+,}</td><td>{get_name(r['h1'])} ➔ {get_name(r['h4'])}</td><td>{r['d1']}/{r['d4']}</td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in display_res])
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead><tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>獲利(雙基準)</th><th>比較核心旅程</th><th>路線</th><th>日期組合</th><th>航班明細</th></tr></thead><tbody>{rows}</tbody></table>"
 
@@ -103,7 +121,7 @@ def generate_matrix_html(res, ref, title):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps, aaa, bbb, version="v42.2"):
+def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps, aaa, bbb, version="v42.3"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -180,9 +198,12 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v42.2)")
+    st.header("⚙️ 獵殺控制台 (v42.3)")
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
+    
+    # 開關在這裡定義，用來決定下面的航網資料庫
     ci_only = st.checkbox("🌸 華航限定 (直營/聯營)", value=True)
+    
     workers = st.slider("併發上限", 20, 100, 50)
     show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     st.divider()
@@ -191,31 +212,44 @@ with st.sidebar:
     email_on = st.checkbox("寄送 Email 報告", value=True)
     if st.button("🛑 停止任務"): st.session_state.run_id = None; st.rerun()
 
+# 🌍 核心邏輯：根據「華航限定」開關，動態切換作用中的站點清單
+ACTIVE_HUBS = CI_HUBS if ci_only else ALL_HUBS
+ACTIVE_CITIES = CI_CITIES if ci_only else ALL_CITIES
+
+# 安全抓取預設 index，避免切換名單時出錯
+def safe_idx(target):
+    for i, s in enumerate(ACTIVE_CITIES):
+        if s.startswith(target): return i
+    return 0
+
 if use_manual_ref:
-    st.markdown(f"<div style='padding:10px;background:rgba(0,230,118,0.1);border-radius:8px;'>🎯 <b>當前對標基準價：</b> {manual_ref_val:,} TWD (手掌握校準)</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='padding:10px;background:rgba(0,230,118,0.1);border-radius:8px;'>🎯 <b>當前對標基準價：</b> {manual_ref_val:,} TWD (手動校準)</div>", unsafe_allow_html=True)
 else:
     st.markdown(f"<div style='padding:10px;background:rgba(0,230,118,0.1);border-radius:8px;'>🎯 <b>當前對標基準價：</b> 接駁來回({st.session_state.ref_aaa:,}) + 核心旅程({st.session_state.ref_bbb:,}) = {st.session_state.ref_price:,} TWD</div>", unsafe_allow_html=True)
 
 trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
 c1, c2 = st.columns(2)
 if trip_mode == "來回":
-    b_org = c1.selectbox("起點", ALL_CITIES, index=IDX_TPE); d2_dt = c1.date_input("去程日期", value=date(2026, 6, 11))
-    b_dst = c2.selectbox("終點", ALL_CITIES, index=IDX_PRG); d3_dt = c2.date_input("回程日期", value=date(2026, 6, 25))
+    b_org = c1.selectbox("起點", ACTIVE_CITIES, index=safe_idx("TPE"))
+    d2_dt = c1.date_input("去程日期", value=date(2026, 6, 11))
+    b_dst = c2.selectbox("終點", ACTIVE_CITIES, index=safe_idx("PRG"))
+    d3_dt = c2.date_input("回程日期", value=date(2026, 6, 25))
     d2o, d2d, d3o, d3d = b_org.split(" ")[0], b_dst.split(" ")[0], b_dst.split(" ")[0], b_org.split(" ")[0]
 else:
-    d2os = c1.selectbox("D2 出發", ALL_CITIES, index=IDX_TPE); d2_dt = c1.date_input("D2 日期", value=date(2026, 6, 11))
-    d2ds = c1.selectbox("D2 目的", ALL_CITIES, index=IDX_PRG)
-    d3os = c2.selectbox("D3 出發", ALL_CITIES, index=IDX_FRA); d3_dt = c2.date_input("D3 日期", value=date(2026, 6, 25))
-    d3ds = c2.selectbox("D3 目的", ALL_CITIES, index=IDX_TPE)
+    d2os = c1.selectbox("D2 出發", ACTIVE_CITIES, index=safe_idx("TPE")); d2_dt = c1.date_input("D2 日期", value=date(2026, 6, 11))
+    d2ds = c1.selectbox("D2 目的", ACTIVE_CITIES, index=safe_idx("PRG"))
+    d3os = c2.selectbox("D3 出發", ACTIVE_CITIES, index=safe_idx("FRA")); d3_dt = c2.date_input("D3 日期", value=date(2026, 6, 25))
+    d3ds = c2.selectbox("D3 目的", ACTIVE_CITIES, index=safe_idx("TPE"))
     d2o, d2d, d3o, d3d = d2os.split(" ")[0], d2ds.split(" ")[0], d3os.split(" ")[0], d3ds.split(" ")[0]
 
 st.markdown("---")
 sync = st.checkbox("👯 D4 同步 D1 選擇", value=True)
 cr1, cr4 = st.columns(2)
 with cr1:
-    regs = st.multiselect("區域快速過濾", list(CI_HUBS.keys()))
-    flt_opts = [f"{c} ({n})" for r in regs for c, n in CI_HUBS[r].items()] if regs else ALL_CITIES
-    d1_key = f"d1_sel_{hash(tuple(regs))}"
+    regs = st.multiselect("區域快速過濾", list(ACTIVE_HUBS.keys()))
+    flt_opts = [f"{c} ({n})" for r in regs for c, n in ACTIVE_HUBS[r].items()] if regs else ACTIVE_CITIES
+    # 動態變更 key 以防切換選單時 Streamlit 狀態錯亂
+    d1_key = f"d1_sel_{hash(tuple(regs))}_{ci_only}"
     curr_d1 = st.session_state.get(d1_key, flt_opts if regs else [])
     d1_h = st.multiselect(f"📍 D1 起點站 ({len(curr_d1)})", options=flt_opts, default=flt_opts if regs else None, key=d1_key)
     d1_r = st.date_input("D1 日期範圍", value=(date(2026, 6, 10),))
@@ -294,7 +328,7 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v42.2 精算版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v42.3 動態航網版)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
@@ -306,7 +340,6 @@ if st.session_state.valid_offers:
     
     t1, t2 = st.tabs(["🏆 獲利神票榜", "📍 分站點矩陣"])
     with t1:
-        # 🛠️ 數值格式化：使用 :+, 強制顯示正負號
         df = pd.DataFrame([{
             "總價 (TWD)": f"{r['total']:,}", 
             "獲利 (雙基準)": f"{cur_ref-r['total']:+,}", 
