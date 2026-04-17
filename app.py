@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v42.3 DYNAMIC HUBS", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v42.4 DYNAMIC HUBS", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -30,7 +30,7 @@ def get_hubs():
         "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
     }
     
-    # 🌍 全球大亂鬥航網 (擴充版，涵蓋各大外籍航空與國籍航空樞紐)
+    # 🌍 全球大亂鬥航網 (擴充版)
     all_h = {
         "台灣": {"TPE": "台北桃園", "KHH": "高雄小港", "RMQ": "台中清泉崗"},
         "港澳": {"HKG": "香港", "MFM": "澳門"},
@@ -38,7 +38,7 @@ def get_hubs():
         "東南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
         "中東/中亞": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "DEL": "新德里"},
         "西歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑"},
-        "東歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "布達佩斯"},
+        "東歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙"},
         "南歐": {"FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納"},
         "北歐": {"CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基"},
         "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華"},
@@ -121,7 +121,7 @@ def generate_matrix_html(res, ref, title):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps, aaa, bbb, version="v42.3"):
+def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps, aaa, bbb, version="v42.4"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -198,12 +198,9 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v42.3)")
+    st.header("⚙️ 獵殺控制台 (v42.4)")
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
-    
-    # 開關在這裡定義，用來決定下面的航網資料庫
     ci_only = st.checkbox("🌸 華航限定 (直營/聯營)", value=True)
-    
     workers = st.slider("併發上限", 20, 100, 50)
     show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     st.divider()
@@ -212,11 +209,9 @@ with st.sidebar:
     email_on = st.checkbox("寄送 Email 報告", value=True)
     if st.button("🛑 停止任務"): st.session_state.run_id = None; st.rerun()
 
-# 🌍 核心邏輯：根據「華航限定」開關，動態切換作用中的站點清單
 ACTIVE_HUBS = CI_HUBS if ci_only else ALL_HUBS
 ACTIVE_CITIES = CI_CITIES if ci_only else ALL_CITIES
 
-# 安全抓取預設 index，避免切換名單時出錯
 def safe_idx(target):
     for i, s in enumerate(ACTIVE_CITIES):
         if s.startswith(target): return i
@@ -230,10 +225,8 @@ else:
 trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
 c1, c2 = st.columns(2)
 if trip_mode == "來回":
-    b_org = c1.selectbox("起點", ACTIVE_CITIES, index=safe_idx("TPE"))
-    d2_dt = c1.date_input("去程日期", value=date(2026, 6, 11))
-    b_dst = c2.selectbox("終點", ACTIVE_CITIES, index=safe_idx("PRG"))
-    d3_dt = c2.date_input("回程日期", value=date(2026, 6, 25))
+    b_org = c1.selectbox("起點", ACTIVE_CITIES, index=safe_idx("TPE")); d2_dt = c1.date_input("去程日期", value=date(2026, 6, 11))
+    b_dst = c2.selectbox("終點", ACTIVE_CITIES, index=safe_idx("PRG")); d3_dt = c2.date_input("回程日期", value=date(2026, 6, 25))
     d2o, d2d, d3o, d3d = b_org.split(" ")[0], b_dst.split(" ")[0], b_dst.split(" ")[0], b_org.split(" ")[0]
 else:
     d2os = c1.selectbox("D2 出發", ACTIVE_CITIES, index=safe_idx("TPE")); d2_dt = c1.date_input("D2 日期", value=date(2026, 6, 11))
@@ -248,13 +241,23 @@ cr1, cr4 = st.columns(2)
 with cr1:
     regs = st.multiselect("區域快速過濾", list(ACTIVE_HUBS.keys()))
     flt_opts = [f"{c} ({n})" for r in regs for c, n in ACTIVE_HUBS[r].items()] if regs else ACTIVE_CITIES
-    # 動態變更 key 以防切換選單時 Streamlit 狀態錯亂
-    d1_key = f"d1_sel_{hash(tuple(regs))}_{ci_only}"
+    
+    # 🛠️ 核心修復：狀態記憶清理法，確保切換開關時 D1/D4 選項不會被清空
+    d1_key = f"d1_sel_{hash(tuple(regs))}"
+    if d1_key in st.session_state:
+        st.session_state[d1_key] = [x for x in st.session_state[d1_key] if x in flt_opts]
+        
     curr_d1 = st.session_state.get(d1_key, flt_opts if regs else [])
-    d1_h = st.multiselect(f"📍 D1 起點站 ({len(curr_d1)})", options=flt_opts, default=flt_opts if regs else None, key=d1_key)
+    d1_h = st.multiselect(f"📍 D1 起點站 ({len(curr_d1)})", options=flt_opts, default=curr_d1 if curr_d1 else (flt_opts if regs else None), key=d1_key)
     d1_r = st.date_input("D1 日期範圍", value=(date(2026, 6, 10),))
+
 with cr4:
-    d4_h = d1_h if sync else st.multiselect("📍 D4 終點站", options=flt_opts, default=flt_opts if regs else None)
+    d4_key = "d4_manual"
+    if d4_key in st.session_state:
+        st.session_state[d4_key] = [x for x in st.session_state[d4_key] if x in flt_opts]
+        
+    curr_d4 = st.session_state.get(d4_key, flt_opts if regs else [])
+    d4_h = d1_h if sync else st.multiselect("📍 D4 終點站", options=flt_opts, default=curr_d4 if curr_d4 else (flt_opts if regs else None), key=d4_key)
     d4_r = st.date_input("D4 日期範圍", value=(date(2026, 6, 26),))
 
 # ==========================================
@@ -328,7 +331,7 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v42.3 動態航網版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v42.4 無縫切換版)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
