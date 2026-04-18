@@ -121,19 +121,26 @@ def generate_matrix_html(res, ref, title):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps, aaa, bbb, version="v42.4"):
+# 🛠️ 專屬修改：將艙等參數 cab 傳入，並動態組合為指定的信件標題
+def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps, aaa, bbb, cab, version="v42.4"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
     msg['From'] = S_SENDER
     msg['To'] = S_RECEIVER
     
+    # 艙等中文轉換
+    cab_map = {"BUSINESS": "商務艙", "PREMIUM_ECONOMY": "豪經艙", "ECONOMY": "經濟艙"}
+    cab_zh = cab_map.get(cab, cab)
+    
     d2_s = d2_dt.strftime("%Y-%m-%d")
     d3_s = d3_dt.strftime("%Y-%m-%d")
     cheapest = res[0]['total']
     diff_val = cheapest - bbb
     diff_label = "貴" if diff_val > 0 else "便宜"
-    msg['Subject'] = f"✈️ [{version}] {d2o}➔{d2d}({d2_s}) / {d3o}➔{d3d}({d3_s}) 核心旅程精算表 (最低 {cheapest:,} TWD, 比起核心旅程 {diff_label} {abs(diff_val):,} TWD)"
+    
+    # 🛠️ 專屬標題格式：[v42.4] 商務艙 TPE➔JFK(2026-06-11) / JFK➔TPE(2026-06-29) 精算表 (最低 45,454 TWD, 比起核心旅程 便宜 14,102 TWD)
+    msg['Subject'] = f"✈️ [{version}] {cab_zh} {d2o}➔{d2d}({d2_s}) / {d3o}➔{d3d}({d3_s}) 精算表 (最低 {cheapest:,} TWD, 比起核心旅程 {diff_label} {abs(diff_val):,} TWD)"
     
     header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>版本：{version} 核心旅程多維精算報告</h2><p>時間：{now_str}</p></div>"
     stats_html = f"""
@@ -242,7 +249,6 @@ with cr1:
     regs = st.multiselect("區域快速過濾", list(ACTIVE_HUBS.keys()))
     flt_opts = [f"{c} ({n})" for r in regs for c, n in ACTIVE_HUBS[r].items()] if regs else ACTIVE_CITIES
     
-    # 🛠️ 核心修復：狀態記憶清理法，確保切換開關時 D1/D4 選項不會被清空
     d1_key = f"d1_sel_{hash(tuple(regs))}"
     if d1_key in st.session_state:
         st.session_state[d1_key] = [x for x in st.session_state[d1_key] if x in flt_opts]
@@ -325,7 +331,8 @@ async def start_hunt():
         
         if email_on and st.session_state.valid_offers:
             status.info("📧 正在封裝精算報表...")
-            ok, err = send_detailed_email(st.session_state.valid_offers, cur_ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, st.session_state.perf_stats['time'], st.session_state.perf_stats['dps'], st.session_state.ref_aaa, st.session_state.ref_bbb)
+            # 🛠️ 將 cab (艙等) 傳入 Email 寄送函式
+            ok, err = send_detailed_email(st.session_state.valid_offers, cur_ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, st.session_state.perf_stats['time'], st.session_state.perf_stats['dps'], st.session_state.ref_aaa, st.session_state.ref_bbb, cab)
             if ok: st.success("📧 獵殺完成！報告已寄達。")
             else: st.error(f"🚨 Email 失敗: {err}")
         else: st.success("🎯 獵殺完成！")
