@@ -77,14 +77,19 @@ def get_safe_dates(d_input):
 def get_name(code):
     return f"{code} ({AIRPORT_MAP.get(code, '未知')})"
 
-def generate_table_html(res, ref, core_ref, limit=100):
+def generate_table_html(res, ref, core_ref, core_mode, limit=100):
     display_res = res[:limit]
-    rows = "".join([f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{r['total'] - core_ref:+,}</td><td>{get_name(r['h1'])} ➔ {get_name(r['h4'])}</td><td><span style='font-size:11px;'>{r['d1'][5:]} ➔ {r['d2'][5:]}<br>{r['d3'][5:]} ➔ {r['d4'][5:]}</span></td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>" for r in display_res])
-    return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead><tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>獲利(雙基準)</th><th>比較核心旅程</th><th>路線</th><th>MM-DD 日期組合</th><th>航班明細</th></tr></thead><tbody>{rows}</tbody></table>"
+    # 🛠️ 動態顯示路線：A模式顯示外站組合，B模式顯示主行程組合
+    rows = []
+    for r in display_res:
+        route_str = f"{get_name(r['h1'])} ➔ {get_name(r['h4'])}" if core_mode.startswith("A") else f"{get_name(r['d2d'])} ➔ {get_name(r['d3o'])}"
+        rows.append(f"<tr><td>{r['total']:,}</td><td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td><td>{r['total'] - core_ref:+,}</td><td>{route_str}</td><td><span style='font-size:11px;'>{r['d1'][5:]} ➔ {r['d2'][5:]}<br>{r['d3'][5:]} ➔ {r['d4'][5:]}</span></td><td><span style='font-size:10px;'>{' | '.join(r['legs'])}</span></td></tr>")
+    
+    return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead><tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>獲利(雙基準)</th><th>比較核心旅程</th><th>探索路線</th><th>MM-DD 日期組合</th><th>航班明細</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
 
-# 🛠️ 動態矩陣：根據模式 A/B 切換 X/Y 軸
 def generate_matrix_html(res, ref, title, core_mode):
     if not res: return ""
+    # 🛠️ 動態切換矩陣 X/Y 軸：A看外站日期，B看主程日期
     col_key = 'd1' if core_mode.startswith("A") else 'd2'
     row_key = 'd4' if core_mode.startswith("A") else 'd3'
     axis_label = "D4↘\\D1➡" if core_mode.startswith("A") else "D3↘\\D2➡"
@@ -121,8 +126,7 @@ def generate_matrix_html(res, ref, title, core_mode):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-# 🛠️ 動態 Email 標題與內文
-def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps, aaa, bbb, cab, core_mode, version="v43.0"):
+def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, version="v43.0"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -133,24 +137,20 @@ def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps
     cab_zh = cab_map.get(cab, cab)
     cheapest = res[0]['total']
     
-    # 判定誰是核心
+    # 🛠️ 動態判定核心，並生成信件標題
     if core_mode.startswith("A"):
         core_val = bbb
         diff_val = cheapest - bbb
-        d2_s = res[0]['d2']
-        d3_s = res[0]['d3']
-        subj_focus = f"{d2o}➔{d2d}({d2_s}) / {d3o}➔{d3d}({d3_s})"
+        subj_focus = f"{res[0]['d2o']}➔{res[0]['d2d']}({res[0]['d2']}) / {res[0]['d3o']}➔{res[0]['d3d']}({res[0]['d3']})"
     else:
         core_val = aaa
         diff_val = cheapest - aaa
-        d1_s = res[0]['d1']
-        d4_s = res[0]['d4']
-        subj_focus = f"{res[0]['h1']}➔{d2o}({d1_s}) / {d3d}➔{res[0]['h4']}({d4_s})"
+        subj_focus = f"{res[0]['h1']}➔{res[0]['d2o']}({res[0]['d1']}) / {res[0]['d3d']}➔{res[0]['h4']}({res[0]['d4']})"
         
     diff_label = "貴" if diff_val > 0 else "便宜"
     msg['Subject'] = f"✈️ [{version}] {cab_zh} {subj_focus} 核心精算表 (最低 {cheapest:,} TWD, 比起核心旅程 {diff_label} {abs(diff_val):,} TWD)"
     
-    header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>版本：{version} 雙核心多維精算報告</h2><p>時間：{now_str}</p></div>"
+    header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>版本：{version} 雙向核心精算報告</h2><p>時間：{now_str}</p></div>"
     stats_html = f"""
     <div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px; color:#333;'>
         <b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br>
@@ -159,9 +159,11 @@ def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps
         <b>🏆 尋獲神票：</b> {len(res)} 組
     </div>
     """
+    
     warning = f"<p style='color:#e67e22;'>⚠️ 僅顯示前 100 筆最優結果確保寄達。</p>" if len(res) > 100 else ""
-    body = f"{header}{stats_html}{warning}<h3>📋 獲利神票榜 (Top 100)</h3>{generate_table_html(res, ref, core_val, limit=100)}"
+    body = f"{header}{stats_html}{warning}<h3>📋 獲利神票榜 (Top 100)</h3>{generate_table_html(res, ref, core_val, core_mode, limit=100)}"
     msg.attach(MIMEText(f"<html><body>{body}</body></html>", 'html', 'utf-8'))
+    
     try:
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
             s.starttls(); s.login(S_SENDER, S_PWD); s.send_message(msg)
@@ -174,7 +176,7 @@ def send_detailed_email(res, ref, d2o, d2d, d3o, d3d, d2_dt, d3_dt, elapsed, dps
 # ==========================================
 async def fetch_api(client, sem, task_data, rid, ci_only_flag):
     if st.session_state.run_id != rid: return None
-    legs, cabin, h1, h4, d1, d2, d3, d4 = task_data
+    legs, cabin, h1, d2o, d2d, d3o, d3d, h4, d1, d2, d3, d4 = task_data
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     async with sem:
@@ -198,8 +200,8 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
                                 l_sum.append(f"{mk or op}{f.get('flightNumber', '')}")
                         if is_valid_airline:
                             p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
-                            # 🛠️ 擴充紀錄 d2, d3 供後續矩陣與報表使用
-                            valid.append({"total": p, "legs": l_sum, "h1": h1, "h4": h4, "d1": d1, "d2": d2, "d3": d3, "d4": d4})
+                            # 儲存所有站點與日期，讓報表完美動態呈現
+                            valid.append({"total": p, "legs": l_sum, "h1": h1, "d2o": d2o, "d2d": d2d, "d3o": d3o, "d3d": d3d, "h4": h4, "d1": d1, "d2": d2, "d3": d3, "d4": d4})
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 elif res.status_code == 429: await asyncio.sleep(2.0)
             except: await asyncio.sleep(1.0)
@@ -209,7 +211,8 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    # 🎯 全新雙核心切換開關
+    st.header("⚙️ 獵殺控制台 (v43.0)")
+    # 🎯 全新雙向核心切換
     core_mode = st.radio("🎯 核心旅程模式", ["A. 鎖定 D2/D3 (常規尋找便宜外站)", "B. 鎖定 D1/D4 (已知外站, 尋找主行程)"])
     st.divider()
     
@@ -236,62 +239,94 @@ if use_manual_ref:
 else:
     st.markdown(f"<div style='padding:10px;background:rgba(0,230,118,0.1);border-radius:8px;'>🎯 <b>當前對標基準價：</b> 接駁來回({st.session_state.ref_aaa:,}) + 主行程({st.session_state.ref_bbb:,}) = {st.session_state.ref_price:,} TWD</div>", unsafe_allow_html=True)
 
+is_mode_b = core_mode.startswith("B")
+
 trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
 c1, c2 = st.columns(2)
-if trip_mode == "來回":
-    b_org = c1.selectbox("起點", ACTIVE_CITIES, index=safe_idx("TPE"))
-    # 🛠️ 根據模式解放 D2/D3 日期區間
-    if core_mode.startswith("A"):
-        d2_dt = c1.date_input("去程日期", value=date(2026, 6, 11))
-    else:
-        d2_r = c1.date_input("去程日期範圍", value=(date(2026, 6, 11),))
-        
-    b_dst = c2.selectbox("終點", ACTIVE_CITIES, index=safe_idx("PRG"))
-    if core_mode.startswith("A"):
-        d3_dt = c2.date_input("回程日期", value=date(2026, 6, 25))
-    else:
-        d3_r = c2.date_input("回程日期範圍", value=(date(2026, 6, 25),))
-        
-    d2o, d2d, d3o, d3d = b_org.split(" ")[0], b_dst.split(" ")[0], b_dst.split(" ")[0], b_org.split(" ")[0]
-else:
-    d2os = c1.selectbox("D2 出發", ACTIVE_CITIES, index=safe_idx("TPE"))
-    if core_mode.startswith("A"):
-        d2_dt = c1.date_input("D2 日期", value=date(2026, 6, 11))
-    else:
-        d2_r = c1.date_input("D2 日期範圍", value=(date(2026, 6, 11),))
-        
-    d2ds = c1.selectbox("D2 目的", ACTIVE_CITIES, index=safe_idx("PRG"))
 
-    d3os = c2.selectbox("D3 出發", ACTIVE_CITIES, index=safe_idx("FRA"))
-    if core_mode.startswith("A"):
-        d3_dt = c2.date_input("D3 日期", value=date(2026, 6, 25))
-    else:
-        d3_r = c2.date_input("D3 日期範圍", value=(date(2026, 6, 25),))
-        
-    d3ds = c2.selectbox("D3 目的", ACTIVE_CITIES, index=safe_idx("TPE"))
-    d2o, d2d, d3o, d3d = d2os.split(" ")[0], d2ds.split(" ")[0], d3os.split(" ")[0], d3ds.split(" ")[0]
+# 🎯 上半部 UI (鎖定單一日期區塊)
+if trip_mode == "來回":
+    t_l1 = "D1 起點 (外站回台)" if is_mode_b else "去程起點 (D2)"
+    t_l2 = "D4 終點 (台灣出發)" if is_mode_b else "去程目的 (D3)"
+    t_d1 = "D1 抵台日期" if is_mode_b else "去程日期 (D2)"
+    t_d2 = "D4 出發日期" if is_mode_b else "回程日期 (D3)"
+    
+    top_loc1 = c1.selectbox(t_l1, ACTIVE_CITIES, index=safe_idx("NRT" if is_mode_b else "TPE"))
+    top_dt1 = c1.date_input(t_d1, value=date(2026, 6, 11))
+    
+    top_loc2 = c2.selectbox(t_l2, ACTIVE_CITIES, index=safe_idx("BKK" if is_mode_b else "PRG"))
+    top_dt2 = c2.date_input(t_d2, value=date(2026, 6, 25))
+    
+    top_loc3 = top_loc2
+    top_loc4 = top_loc1
+else:
+    t_l1 = "D1 起點 (外站)" if is_mode_b else "D2 出發"
+    t_l2 = "D1 終點 (台灣Base)" if is_mode_b else "D2 目的"
+    t_l3 = "D4 起點 (台灣Base)" if is_mode_b else "D3 出發"
+    t_l4 = "D4 終點 (外站)" if is_mode_b else "D3 目的"
+    
+    t_d1 = "D1 日期" if is_mode_b else "D2 日期"
+    t_d2 = "D4 日期" if is_mode_b else "D3 日期"
+    
+    top_loc1 = c1.selectbox(t_l1, ACTIVE_CITIES, index=safe_idx("NRT" if is_mode_b else "TPE"))
+    top_dt1 = c1.date_input(t_d1, value=date(2026, 6, 11))
+    top_loc2 = c1.selectbox(t_l2, ACTIVE_CITIES, index=safe_idx("TPE" if is_mode_b else "PRG"))
+    
+    top_loc3 = c2.selectbox(t_l3, ACTIVE_CITIES, index=safe_idx("TPE" if is_mode_b else "FRA"))
+    top_dt2 = c2.date_input(t_d2, value=date(2026, 6, 25))
+    top_loc4 = c2.selectbox(t_l4, ACTIVE_CITIES, index=safe_idx("BKK" if is_mode_b else "TPE"))
+
+# 邏輯變數分配
+if is_mode_b:
+    h1_fix = top_loc1.split(" ")[0]
+    d2o_fix = "TPE" if trip_mode == "來回" else top_loc2.split(" ")[0]
+    d3d_fix = "TPE" if trip_mode == "來回" else top_loc3.split(" ")[0]
+    h4_fix = top_loc2.split(" ")[0] if trip_mode == "來回" else top_loc4.split(" ")[0]
+    d1_fix_dt = top_dt1
+    d4_fix_dt = top_dt2
+else:
+    d2o_fix = top_loc1.split(" ")[0]
+    d2d_fix = top_loc2.split(" ")[0]
+    d3o_fix = top_loc2.split(" ")[0] if trip_mode == "來回" else top_loc3.split(" ")[0]
+    d3d_fix = top_loc1.split(" ")[0] if trip_mode == "來回" else top_loc4.split(" ")[0]
+    d2_fix_dt = top_dt1
+    d3_fix_dt = top_dt2
 
 st.markdown("---")
-sync = st.checkbox("👯 D4 同步 D1 選擇", value=True)
+
+# 🎯 下半部 UI (彈性區間探索區塊)
+b_l1 = "📍 D2 目的地 (主行程)" if is_mode_b else "📍 D1 起點站 (接駁)"
+b_l2 = "📍 D3 出發站 (主行程)" if is_mode_b else "📍 D4 終點站 (接駁)"
+b_sync = "👯 D3 同步 D2 選擇" if is_mode_b else "👯 D4 同步 D1 選擇"
+b_d1 = "D2 日期範圍" if is_mode_b else "D1 日期範圍"
+b_d2 = "D3 日期範圍" if is_mode_b else "D4 日期範圍"
+
+sync = st.checkbox(b_sync, value=True)
 cr1, cr4 = st.columns(2)
 with cr1:
     regs = st.multiselect("區域快速過濾", list(ACTIVE_HUBS.keys()))
     flt_opts = [f"{c} ({n})" for r in regs for c, n in ACTIVE_HUBS[r].items()] if regs else ACTIVE_CITIES
     
-    d1_key = f"d1_sel_{hash(tuple(regs))}"
+    d1_key = f"bot_sel1_{hash(tuple(regs))}"
     if d1_key in st.session_state:
         st.session_state[d1_key] = [x for x in st.session_state[d1_key] if x in flt_opts]
-    curr_d1 = st.session_state.get(d1_key, flt_opts if regs else [])
-    d1_h = st.multiselect(f"📍 D1 起點站 ({len(curr_d1)})", options=flt_opts, default=curr_d1 if curr_d1 else (flt_opts if regs else None), key=d1_key)
-    d1_r = st.date_input("D1 日期範圍", value=(date(2026, 6, 10),))
+    curr_b1 = st.session_state.get(d1_key, flt_opts if regs else [])
+    bot_locs1 = st.multiselect(f"{b_l1} ({len(curr_b1)})", options=flt_opts, default=curr_b1 if curr_b1 else (flt_opts if regs else None), key=d1_key)
+    
+    # 🛠️ 自動推算 24H 日期 (B模式往後推1天, A模式往前推1天)
+    d_bot1_def = top_dt1 + timedelta(days=1) if is_mode_b else top_dt1 - timedelta(days=1)
+    bot_r1 = st.date_input(b_d1, value=(d_bot1_def,))
 
 with cr4:
-    d4_key = "d4_manual"
+    d4_key = "bot_sel2_manual"
     if d4_key in st.session_state:
         st.session_state[d4_key] = [x for x in st.session_state[d4_key] if x in flt_opts]
-    curr_d4 = st.session_state.get(d4_key, flt_opts if regs else [])
-    d4_h = d1_h if sync else st.multiselect("📍 D4 終點站", options=flt_opts, default=curr_d4 if curr_d4 else (flt_opts if regs else None), key=d4_key)
-    d4_r = st.date_input("D4 日期範圍", value=(date(2026, 6, 26),))
+    curr_b2 = st.session_state.get(d4_key, flt_opts if regs else [])
+    bot_locs2 = bot_locs1 if sync else st.multiselect(b_l2, options=flt_opts, default=curr_b2 if curr_b2 else (flt_opts if regs else None), key=d4_key)
+    
+    # 🛠️ 自動推算 24H 日期 (B模式往前推1天, A模式往後推1天)
+    d_bot2_def = top_dt2 - timedelta(days=1) if is_mode_b else top_dt2 + timedelta(days=1)
+    bot_r2 = st.date_input(b_d2, value=(d_bot2_def,))
 
 # ==========================================
 # 4. 獵殺大腦
@@ -299,30 +334,29 @@ with cr4:
 async def start_hunt():
     try:
         rid = str(uuid.uuid4()); st.session_state.run_id = rid
-        d1_s, d1_e = get_safe_dates(d1_r); d4_s, d4_e = get_safe_dates(d4_r)
-        d1_list = [d1_s + timedelta(days=i) for i in range((d1_e-d1_s).days + 1)]
-        d4_list = [d4_s + timedelta(days=i) for i in range((d4_e-d4_s).days + 1)]
-        
-        # 🛠️ 根據模式建立 D2/D3 迴圈清單
-        if core_mode.startswith("A"):
-            d2_list, d3_list = [d2_dt], [d3_dt]
-        else:
-            d2_start, d2_end = get_safe_dates(d2_r)
-            d3_start, d3_end = get_safe_dates(d3_r)
-            d2_list = [d2_start + timedelta(days=i) for i in range((d2_end-d2_start).days + 1)]
-            d3_list = [d3_start + timedelta(days=i) for i in range((d3_end-d3_start).days + 1)]
+        d_bot1_s, d_bot1_e = get_safe_dates(bot_r1)
+        d_bot2_s, d_bot2_e = get_safe_dates(bot_r2)
+        d_bot1_list = [d_bot1_s + timedelta(days=i) for i in range((d_bot1_e-d_bot1_s).days + 1)]
+        d_bot2_list = [d_bot2_s + timedelta(days=i) for i in range((d_bot2_e-d_bot2_s).days + 1)]
 
         tasks = []
-        for h1r, h4r in product(d1_h, d4_h):
-            h1, h4 = h1r.split(" ")[0], h4r.split(" ")[0]
-            # 🛠️ 擴增為 4D 迴圈，但時間軸定律 d1 <= d2 <= d3 <= d4 絕對守死
-            for d1, d2, d3, d4 in product(d1_list, d2_list, d3_list, d4_list):
+        for b1_raw, b2_raw in product(bot_locs1, bot_locs2):
+            b1, b2 = b1_raw.split(" ")[0], b2_raw.split(" ")[0]
+            for db1, db2 in product(d_bot1_list, d_bot2_list):
+                if is_mode_b:
+                    h1, d2o, d2d, d3o, d3d, h4 = h1_fix, d2o_fix, b1, b2, d3d_fix, h4_fix
+                    d1, d2, d3, d4 = d1_fix_dt, db1, db2, d4_fix_dt
+                else:
+                    h1, d2o, d2d, d3o, d3d, h4 = b1, d2o_fix, d2d_fix, d3o_fix, d3d_fix, b2
+                    d1, d2, d3, d4 = db1, d2_fix_dt, d3_fix_dt, db2
+
                 if d1 <= d2 <= d3 <= d4:
                     l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2o}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
                          {"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2.strftime("%Y-%m-%d")},
                          {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3.strftime("%Y-%m-%d")},
                          {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
-                    tasks.append((l, cab, h1, h4, d1.strftime("%Y-%m-%d"), d2.strftime("%Y-%m-%d"), d3.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
+                    # 傳入所有 10 個變數供報表使用
+                    tasks.append((l, cab, h1, d2o, d2d, d3o, d3d, h4, d1.strftime("%Y-%m-%d"), d2.strftime("%Y-%m-%d"), d3.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
         total_tasks = len(tasks)
         if total_tasks == 0: st.warning("任務量為 0 (請檢查日期是否符合 D1≤D2≤D3≤D4)"); return
@@ -331,18 +365,24 @@ async def start_hunt():
         async with httpx.AsyncClient(timeout=40.0) as client:
             aaa, bbb = 0, 0
             if not use_manual_ref:
-                status.info("🎯 正在同步計算 接駁來回 與 主行程 基準價...")
-                # 基準價採用區間的「第一天」作為代表對標
-                d1_ref, d4_ref = d1_list[0].strftime("%Y-%m-%d"), d4_list[0].strftime("%Y-%m-%d")
-                d2_ref, d3_ref = d2_list[0].strftime("%Y-%m-%d"), d3_list[0].strftime("%Y-%m-%d")
+                status.info("🎯 正在同步計算 接駁來回 與 核心旅程 基準價...")
+                b1_ref, b2_ref = bot_locs1[0].split(" ")[0], bot_locs2[0].split(" ")[0]
+                db1_ref, db2_ref = d_bot1_list[0], d_bot2_list[0]
                 
-                l_aaa = [{"fromId": f"{d1_h[0][:3]}.AIRPORT", "toId": f"{d2o}.AIRPORT", "date": d1_ref},
-                         {"fromId": f"{d3d}.AIRPORT", "toId": f"{d4_h[0][:3]}.AIRPORT", "date": d4_ref}]
-                l_bbb = [{"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2_ref},
-                         {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3_ref}]
+                if is_mode_b:
+                    rH1, rd2o, rd2d, rd3o, rd3d, rH4 = h1_fix, d2o_fix, b1_ref, b2_ref, d3d_fix, h4_fix
+                    rd1, rd2, rd3, rd4 = d1_fix_dt, db1_ref, db2_ref, d4_fix_dt
+                else:
+                    rH1, rd2o, rd2d, rd3o, rd3d, rH4 = b1_ref, d2o_fix, d2d_fix, d3o_fix, d3d_fix, b2_ref
+                    rd1, rd2, rd3, rd4 = db1_ref, d2_fix_dt, d3_fix_dt, db2_ref
+
+                l_aaa = [{"fromId": f"{rH1}.AIRPORT", "toId": f"{rd2o}.AIRPORT", "date": rd1.strftime("%Y-%m-%d")},
+                         {"fromId": f"{rd3d}.AIRPORT", "toId": f"{rH4}.AIRPORT", "date": rd4.strftime("%Y-%m-%d")}]
+                l_bbb = [{"fromId": f"{rd2o}.AIRPORT", "toId": f"{rd2d}.AIRPORT", "date": rd2.strftime("%Y-%m-%d")},
+                         {"fromId": f"{rd3o}.AIRPORT", "toId": f"{rd3d}.AIRPORT", "date": rd3.strftime("%Y-%m-%d")}]
                 
-                r_aaa = await fetch_api(client, asyncio.Semaphore(1), (l_aaa, cab, "REF", "REF", "", "", "", ""), rid, ci_only)
-                r_bbb = await fetch_api(client, asyncio.Semaphore(1), (l_bbb, cab, "REF", "REF", "", "", "", ""), rid, ci_only)
+                r_aaa = await fetch_api(client, asyncio.Semaphore(1), (l_aaa, cab, "REF", "REF", "REF", "REF", "REF", "REF", "", "", "", ""), rid, ci_only)
+                r_bbb = await fetch_api(client, asyncio.Semaphore(1), (l_bbb, cab, "REF", "REF", "REF", "REF", "REF", "REF", "", "", "", ""), rid, ci_only)
                 
                 aaa = r_aaa['total'] if r_aaa else 0
                 bbb = r_bbb['total'] if r_bbb else 0
@@ -368,25 +408,23 @@ async def start_hunt():
             st.session_state.perf_stats = {"time": time.time() - start_t, "dps": total_tasks / (time.time() - start_t)}
 
         st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
-        is_range = len(d1_list) > 1 or len(d4_list) > 1 or len(d2_list) > 1 or len(d3_list) > 1
         
         if email_on and st.session_state.valid_offers:
             status.info("📧 正在封裝精算報表...")
-            ok, err = send_detailed_email(st.session_state.valid_offers, cur_ref, d2o, d2d, d3o, d3d, d2_list[0], d3_list[0], st.session_state.perf_stats['time'], st.session_state.perf_stats['dps'], st.session_state.ref_aaa, st.session_state.ref_bbb, cab, core_mode)
+            ok, err = send_detailed_email(st.session_state.valid_offers, cur_ref, st.session_state.perf_stats['time'], st.session_state.perf_stats['dps'], st.session_state.ref_aaa, st.session_state.ref_bbb, cab, core_mode)
             if ok: st.success("📧 獵殺完成！報告已寄達。")
             else: st.error(f"🚨 Email 失敗: {err}")
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v43.0 雙核心切換版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v43.0 雙核心反向版)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
 if st.session_state.valid_offers:
     st.markdown("---")
     cur_ref = manual_ref_val if use_manual_ref else st.session_state.ref_price
-    # 決定「比較核心」是扣掉誰：A扣掉bbb, B扣掉aaa
-    core_ref = st.session_state.ref_bbb if core_mode.startswith("A") else st.session_state.ref_aaa
+    core_ref = st.session_state.ref_bbb if not is_mode_b else st.session_state.ref_aaa
     
     p = st.session_state.perf_stats
     st.markdown(f"<div style='background:rgba(0,230,118,0.1); padding:15px; border-radius:8px; border-left:5px solid #00e676; margin-bottom:20px;'><b>⏱️ {p.get('time',0):.2f} 秒</b> | <b>⚡ {p.get('dps',0):.2f} 筆/秒</b> | <b>🏆 {len(st.session_state.valid_offers)} 組</b></div>", unsafe_allow_html=True)
@@ -397,15 +435,21 @@ if st.session_state.valid_offers:
             "總價 (TWD)": f"{r['total']:,}", 
             "獲利 (雙基準)": f"{cur_ref-r['total']:+,}", 
             "比較核心旅程": f"{r['total'] - core_ref:+,}",
-            "路線": f"{get_name(r['h1'])}➔{get_name(r['h4'])}", 
+            "探索路線": f"{get_name(r['h1'])}➔{get_name(r['h4'])}" if not is_mode_b else f"{get_name(r['d2d'])}➔{get_name(r['d3o'])}", 
             "日期": f"{r['d1'][5:]}➔{r['d2'][5:]} | {r['d3'][5:]}➔{r['d4'][5:]}", 
             "航班": "|".join(r['legs'])
         } for r in st.session_state.valid_offers])
         st.dataframe(df, use_container_width=True, hide_index=True)
     with t2:
-        routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in st.session_state.valid_offers)))
-        for rk in routes:
-            h1c, h4c = rk.split(" ➔ ")
-            rd = [r for r in st.session_state.valid_offers if r['h1'] == h1c and r['h4'] == h4c]
-            matrix_title = f"分析：外站 {get_name(h1c)} ➔ {get_name(h4c)}" if core_mode.startswith("A") else f"分析：主行程 {get_name(d2o)} ➔ {get_name(d2d)}"
-            st.markdown(generate_matrix_html(rd, cur_ref, matrix_title, core_mode), unsafe_allow_html=True)
+        if not is_mode_b:
+            routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in st.session_state.valid_offers)))
+            for rk in routes:
+                h1c, h4c = rk.split(" ➔ ")
+                rd = [r for r in st.session_state.valid_offers if r['h1'] == h1c and r['h4'] == h4c]
+                st.markdown(generate_matrix_html(rd, cur_ref, f"分析：外站 {get_name(h1c)} ➔ {get_name(h4c)}", core_mode), unsafe_allow_html=True)
+        else:
+            routes = sorted(list(set(f"{r['d2d']} ➔ {r['d3o']}" for r in st.session_state.valid_offers)))
+            for rk in routes:
+                d2c, d3c = rk.split(" ➔ ")
+                rd = [r for r in st.session_state.valid_offers if r['d2d'] == d2c and r['d3o'] == d3c]
+                st.markdown(generate_matrix_html(rd, cur_ref, f"分析：主行程 {get_name(d2c)} ➔ {get_name(d3c)}", core_mode), unsafe_allow_html=True)
