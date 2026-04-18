@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v43.0 DUAL CORE", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v43.1 LIVE STREAM", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -79,7 +79,6 @@ def get_name(code):
 
 def generate_table_html(res, ref, core_ref, core_mode, limit=100):
     display_res = res[:limit]
-    # 🛠️ 動態顯示路線：A模式顯示外站組合，B模式顯示主行程組合
     rows = []
     for r in display_res:
         route_str = f"{get_name(r['h1'])} ➔ {get_name(r['h4'])}" if core_mode.startswith("A") else f"{get_name(r['d2d'])} ➔ {get_name(r['d3o'])}"
@@ -89,7 +88,6 @@ def generate_table_html(res, ref, core_ref, core_mode, limit=100):
 
 def generate_matrix_html(res, ref, title, core_mode):
     if not res: return ""
-    # 🛠️ 動態切換矩陣 X/Y 軸：A看外站日期，B看主程日期
     col_key = 'd1' if core_mode.startswith("A") else 'd2'
     row_key = 'd4' if core_mode.startswith("A") else 'd3'
     axis_label = "D4↘\\D1➡" if core_mode.startswith("A") else "D3↘\\D2➡"
@@ -126,7 +124,7 @@ def generate_matrix_html(res, ref, title, core_mode):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, version="v43.0"):
+def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, version="v43.1"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -137,7 +135,6 @@ def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, versio
     cab_zh = cab_map.get(cab, cab)
     cheapest = res[0]['total']
     
-    # 🛠️ 動態判定核心，並生成信件標題
     if core_mode.startswith("A"):
         core_val = bbb
         diff_val = cheapest - bbb
@@ -150,7 +147,7 @@ def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, versio
     diff_label = "貴" if diff_val > 0 else "便宜"
     msg['Subject'] = f"✈️ [{version}] {cab_zh} {subj_focus} 核心精算表 (最低 {cheapest:,} TWD, 比起核心旅程 {diff_label} {abs(diff_val):,} TWD)"
     
-    header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>版本：{version} 雙向核心精算報告</h2><p>時間：{now_str}</p></div>"
+    header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>版本：{version} 雙核心多維精算報告</h2><p>時間：{now_str}</p></div>"
     stats_html = f"""
     <div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px; color:#333;'>
         <b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br>
@@ -159,11 +156,9 @@ def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, versio
         <b>🏆 尋獲神票：</b> {len(res)} 組
     </div>
     """
-    
     warning = f"<p style='color:#e67e22;'>⚠️ 僅顯示前 100 筆最優結果確保寄達。</p>" if len(res) > 100 else ""
     body = f"{header}{stats_html}{warning}<h3>📋 獲利神票榜 (Top 100)</h3>{generate_table_html(res, ref, core_val, core_mode, limit=100)}"
     msg.attach(MIMEText(f"<html><body>{body}</body></html>", 'html', 'utf-8'))
-    
     try:
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
             s.starttls(); s.login(S_SENDER, S_PWD); s.send_message(msg)
@@ -200,7 +195,6 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
                                 l_sum.append(f"{mk or op}{f.get('flightNumber', '')}")
                         if is_valid_airline:
                             p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
-                            # 儲存所有站點與日期，讓報表完美動態呈現
                             valid.append({"total": p, "legs": l_sum, "h1": h1, "d2o": d2o, "d2d": d2d, "d3o": d3o, "d3d": d3d, "h4": h4, "d1": d1, "d2": d2, "d3": d3, "d4": d4})
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 elif res.status_code == 429: await asyncio.sleep(2.0)
@@ -211,8 +205,6 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v43.0)")
-    # 🎯 全新雙向核心切換
     core_mode = st.radio("🎯 核心旅程模式", ["A. 鎖定 D2/D3 (常規尋找便宜外站)", "B. 鎖定 D1/D4 (已知外站, 尋找主行程)"])
     st.divider()
     
@@ -244,7 +236,6 @@ is_mode_b = core_mode.startswith("B")
 trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
 c1, c2 = st.columns(2)
 
-# 🎯 上半部 UI (鎖定單一日期區塊)
 if trip_mode == "來回":
     t_l1 = "D1 起點 (外站回台)" if is_mode_b else "去程起點 (D2)"
     t_l2 = "D4 終點 (台灣出發)" if is_mode_b else "去程目的 (D3)"
@@ -276,7 +267,6 @@ else:
     top_dt2 = c2.date_input(t_d2, value=date(2026, 6, 25))
     top_loc4 = c2.selectbox(t_l4, ACTIVE_CITIES, index=safe_idx("BKK" if is_mode_b else "TPE"))
 
-# 邏輯變數分配
 if is_mode_b:
     h1_fix = top_loc1.split(" ")[0]
     d2o_fix = "TPE" if trip_mode == "來回" else top_loc2.split(" ")[0]
@@ -294,7 +284,6 @@ else:
 
 st.markdown("---")
 
-# 🎯 下半部 UI (彈性區間探索區塊)
 b_l1 = "📍 D2 目的地 (主行程)" if is_mode_b else "📍 D1 起點站 (接駁)"
 b_l2 = "📍 D3 出發站 (主行程)" if is_mode_b else "📍 D4 終點站 (接駁)"
 b_sync = "👯 D3 同步 D2 選擇" if is_mode_b else "👯 D4 同步 D1 選擇"
@@ -313,7 +302,6 @@ with cr1:
     curr_b1 = st.session_state.get(d1_key, flt_opts if regs else [])
     bot_locs1 = st.multiselect(f"{b_l1} ({len(curr_b1)})", options=flt_opts, default=curr_b1 if curr_b1 else (flt_opts if regs else None), key=d1_key)
     
-    # 🛠️ 自動推算 24H 日期 (B模式往後推1天, A模式往前推1天)
     d_bot1_def = top_dt1 + timedelta(days=1) if is_mode_b else top_dt1 - timedelta(days=1)
     bot_r1 = st.date_input(b_d1, value=(d_bot1_def,))
 
@@ -324,7 +312,6 @@ with cr4:
     curr_b2 = st.session_state.get(d4_key, flt_opts if regs else [])
     bot_locs2 = bot_locs1 if sync else st.multiselect(b_l2, options=flt_opts, default=curr_b2 if curr_b2 else (flt_opts if regs else None), key=d4_key)
     
-    # 🛠️ 自動推算 24H 日期 (B模式往前推1天, A模式往後推1天)
     d_bot2_def = top_dt2 - timedelta(days=1) if is_mode_b else top_dt2 + timedelta(days=1)
     bot_r2 = st.date_input(b_d2, value=(d_bot2_def,))
 
@@ -355,12 +342,16 @@ async def start_hunt():
                          {"fromId": f"{d2o}.AIRPORT", "toId": f"{d2d}.AIRPORT", "date": d2.strftime("%Y-%m-%d")},
                          {"fromId": f"{d3o}.AIRPORT", "toId": f"{d3d}.AIRPORT", "date": d3.strftime("%Y-%m-%d")},
                          {"fromId": f"{d3d}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
-                    # 傳入所有 10 個變數供報表使用
                     tasks.append((l, cab, h1, d2o, d2d, d3o, d3d, h4, d1.strftime("%Y-%m-%d"), d2.strftime("%Y-%m-%d"), d3.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
         total_tasks = len(tasks)
         if total_tasks == 0: st.warning("任務量為 0 (請檢查日期是否符合 D1≤D2≤D3≤D4)"); return
-        bar, status, final_res = st.progress(0), st.empty(), []
+        
+        # 🛠️ 準備 UI Placeholders
+        bar = st.progress(0)
+        status = st.empty()
+        live_table = st.empty()  # 🎯 這是即時預覽表的專屬容器
+        final_res = []
         
         async with httpx.AsyncClient(timeout=40.0) as client:
             aaa, bbb = 0, 0
@@ -390,6 +381,8 @@ async def start_hunt():
                 st.session_state.ref_price = aaa + bbb
 
             cur_ref = manual_ref_val if use_manual_ref else st.session_state.ref_price
+            core_ref_live = bbb if not is_mode_b else aaa # 動態判定即時預覽的核心比較基準
+            
             sem, start_t, last_upd = asyncio.Semaphore(workers), time.time(), 0
             coros = [fetch_api(client, sem, t, rid, ci_only) for t in tasks]
             
@@ -399,15 +392,33 @@ async def start_hunt():
                 if r and (show_all or (cur_ref - r['total'] >= 0)): final_res.append(r)
                 
                 now = time.time()
+                # 🎯 2秒節流閥：更新進度條與即時排行榜
                 if now - last_upd >= 2.0 or i == total_tasks - 1:
                     rps = (i+1)/(now - start_t) if (now - start_t) > 0 else 0
                     eta = (total_tasks - (i+1)) / rps if rps > 0 else 0
                     bar.progress((i+1)/total_tasks, text=f"⚡ {i+1}/{total_tasks} ({((i+1)/total_tasks*100):.1f}%) | {rps:.1f} RPS | 剩餘: {int(eta//60)}分{int(eta%60)}秒 | 鎖定: {len(final_res)}")
+                    
+                    # 🚀 即時開獎：抽出目前最便宜的 50 筆神票動態顯示
+                    if final_res:
+                        temp_sorted = sorted(final_res, key=lambda x: x['total'])[:50]
+                        df_live = pd.DataFrame([{
+                            "總價 (TWD)": f"{r_live['total']:,}", 
+                            "獲利 (雙基準)": f"{cur_ref-r_live['total']:+,}", 
+                            "比較核心旅程": f"{r_live['total'] - core_ref_live:+,}",
+                            "探索路線": f"{get_name(r_live['h1'])}➔{get_name(r_live['h4'])}" if not is_mode_b else f"{get_name(r_live['d2d'])}➔{get_name(r_live['d3o'])}", 
+                            "日期": f"{r_live['d1'][5:]}➔{r_live['d2'][5:]} | {r_live['d3'][5:]}➔{r_live['d4'][5:]}", 
+                            "航班": "|".join(r_live['legs'])
+                        } for r_live in temp_sorted])
+                        live_table.dataframe(df_live, use_container_width=True, hide_index=True)
+                        
                     last_upd = now
 
             st.session_state.perf_stats = {"time": time.time() - start_t, "dps": total_tasks / (time.time() - start_t)}
 
         st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total'])
+        
+        # 🧹 搜尋完畢後，把即時預覽表清掉，讓下方完整的 Tabs 接手顯示
+        live_table.empty()
         
         if email_on and st.session_state.valid_offers:
             status.info("📧 正在封裝精算報表...")
@@ -417,7 +428,7 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v43.0 雙核心反向版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v43.1 即時戰情版)", use_container_width=True):
     st.session_state.valid_offers = []
     asyncio.run(start_hunt())
 
