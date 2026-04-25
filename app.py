@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v43.3 CORE B", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v43.6 MEGA SPEED", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -38,7 +38,7 @@ def get_hubs():
         "東歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙"},
         "南歐": {"FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納"},
         "北歐": {"CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基"},
-        "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥畫"},
+        "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華"},
         "美東/中部": {"JFK": "紐約", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多"},
         "南美": {"GRU": "聖保羅", "EZE": "布宜諾斯艾利斯", "SCL": "聖地牙哥"},
         "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭", "PER": "伯斯"}
@@ -135,8 +135,7 @@ def generate_matrix_html(res, ref, title, core_mode):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-# 🛠️ 專屬修改：模式 B 的 Email 標題將焦點轉移至 D1/D4 核心
-def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, version="v43.3"):
+def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, version="v43.6"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -154,7 +153,6 @@ def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, versio
         subj_focus = f"{res[0]['d2o']}➔{res[0]['d2d']}({res[0]['d2']}) / {res[0]['d3o']}➔{res[0]['d3d']}({res[0]['d3']})"
         msg['Subject'] = f"✈️ [{version}] {cab_zh} {subj_focus} 核心精算表 (最低 {cheapest:,} TWD, 比起核心旅程 {diff_label} {abs(diff_val):,} TWD)"
     else:
-        # 🛠️ 模式 B 修改點：將 D1/D4 路徑與日期作為標題重點
         core_val = aaa
         d1_path = f"{res[0]['h1']}➔{res[0]['d2o']}({res[0]['d1']})"
         d4_path = f"{res[0]['d3d']}➔{res[0]['h4']}({res[0]['d4']})"
@@ -181,11 +179,13 @@ def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, versio
 # ==========================================
 # 2. 異步引擎
 # ==========================================
-async def fetch_api(client, sem, task_data, rid, ci_only_flag):
+async def fetch_api(client, sem, task_data, rid, ci_only_flag, skyteam_flag):
     if st.session_state.run_id != rid: return None
     legs, cabin, h1, d2o, d2d, d3o, d3d, h4, d1, d2, d3, d4 = task_data
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
+    SKYTEAM_CODES = {"CI", "AF", "KL", "DL", "KE", "MU", "MF", "VN", "GA", "AM", "AR", "UX", "KQ", "ME", "SV", "RO", "VS", "SK", "AZ"}
+
     async with sem:
         for _ in range(2):
             try:
@@ -203,26 +203,44 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag):
                                 f = leg.get('flightInfo', {})
                                 c_info = f.get('carrierInfo', {})
                                 op, mk = c_info.get('operatingCarrier', ''), c_info.get('marketingCarrier', '')
-                                if ci_only_flag and op != "CI" and mk != "CI": is_valid_airline = False
+                                if ci_only_flag:
+                                    allowed_carriers = SKYTEAM_CODES if skyteam_flag else {"CI"}
+                                    if op not in allowed_carriers and mk not in allowed_carriers:
+                                        is_valid_airline = False
                                 l_sum.append(f"{mk or op}{f.get('flightNumber', '')}")
                         if is_valid_airline:
                             p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
                             valid.append({"total": p, "legs": l_sum, "h1": h1, "d2o": d2o, "d2d": d2d, "d3o": d3o, "d3d": d3d, "h4": h4, "d1": d1, "d2": d2, "d3": d3, "d4": d4})
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
-                elif res.status_code == 429: await asyncio.sleep(2.0)
-            except: await asyncio.sleep(1.0)
+                elif res.status_code == 429:
+                    st.toast("⚠️ API 請求過於頻繁 (429)，正在自動重試...")
+                    await asyncio.sleep(2.0)
+                elif res.status_code in [401, 403]:
+                    st.toast(f"💀 API 拒絕存取 ({res.status_code})！請檢查 RapidAPI 額度是否用盡！")
+                    return None
+                else:
+                    await asyncio.sleep(1.0)
+            except Exception as e:
+                await asyncio.sleep(1.0)
         return None
 
 # ==========================================
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v43.3)")
+    st.header("⚙️ 獵殺控制台 (v43.6 MEGA)")
     core_mode = st.radio("🎯 核心旅程模式", ["A. 鎖定 D2/D3 (常規尋找便宜外站)", "B. 鎖定 D1/D4 (已知外站, 尋找主行程)"])
     st.divider()
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
+    
     ci_only = st.checkbox("🌸 華航限定 (直營/聯營)", value=True)
-    workers = st.slider("併發上限", 20, 100, 50)
+    skyteam_inc = False
+    if ci_only:
+        skyteam_inc = st.checkbox("🤝 包含天合聯盟成員 (SkyTeam)", value=False)
+        
+    # 🏎️ MEGA 解鎖：併發上限開放至 500
+    workers = st.slider("併發上限 (Mega火力全開)", 50, 500, 200)
+    
     show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     st.divider()
     use_manual_ref = st.checkbox("🛠️ 使用手動基準價", value=False)
@@ -332,7 +350,11 @@ async def start_hunt():
                     tasks.append((l, cab, h1, d2o, d2d, d3o, d3d, h4, d1.strftime("%Y-%m-%d"), d2.strftime("%Y-%m-%d"), d3.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
 
         total_tasks = len(tasks); bar, status, live_table, final_res = st.progress(0), st.empty(), st.empty(), []
-        async with httpx.AsyncClient(timeout=40.0) as client:
+        
+        # 🏎️ MEGA 解鎖：動態配置 httpx 連線池上限，與 workers (最高500) 完美同步
+        limits = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
+        
+        async with httpx.AsyncClient(limits=limits, timeout=40.0) as client:
             aaa, bbb = 0, 0
             if not use_manual_ref:
                 status.info("🎯 計算雙核心基準價中..."); b1_ref, b2_ref = bot_locs1[0].split(" ")[0], bot_locs2[0].split(" ")[0]
@@ -342,14 +364,18 @@ async def start_hunt():
                          {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix if is_mode_b else b2_ref}.AIRPORT", "date": rd4.strftime("%Y-%m-%d")}]
                 l_bbb = [{"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix if not is_mode_b else b1_ref}.AIRPORT", "date": rd2.strftime("%Y-%m-%d")},
                          {"fromId": f"{d3o_fix if not is_mode_b else b2_ref}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": rd3.strftime("%Y-%m-%d")}]
-                r_aaa = await fetch_api(client, asyncio.Semaphore(1), (l_aaa, cab, "REF", "REF", "REF", "REF", "REF", "REF", "", "", "", ""), rid, ci_only)
-                r_bbb = await fetch_api(client, asyncio.Semaphore(1), (l_bbb, cab, "REF", "REF", "REF", "REF", "REF", "REF", "", "", "", ""), rid, ci_only)
+                
+                r_aaa = await fetch_api(client, asyncio.Semaphore(1), (l_aaa, cab, "REF", "REF", "REF", "REF", "REF", "REF", "", "", "", ""), rid, ci_only, skyteam_inc)
+                r_bbb = await fetch_api(client, asyncio.Semaphore(1), (l_bbb, cab, "REF", "REF", "REF", "REF", "REF", "REF", "", "", "", ""), rid, ci_only, skyteam_inc)
+                
                 aaa, bbb = (r_aaa['total'] if r_aaa else 0), (r_bbb['total'] if r_bbb else 0)
                 st.session_state.ref_aaa, st.session_state.ref_bbb, st.session_state.ref_price = aaa, bbb, aaa + bbb
 
             cur_ref = manual_ref_val if use_manual_ref else st.session_state.ref_price; core_ref_live = bbb if not is_mode_b else aaa
             sem, start_t, last_upd = asyncio.Semaphore(workers), time.time(), 0
-            coros = [fetch_api(client, sem, t, rid, ci_only) for t in tasks]
+            
+            coros = [fetch_api(client, sem, t, rid, ci_only, skyteam_inc) for t in tasks]
+            
             for i, coro in enumerate(asyncio.as_completed(coros)):
                 if st.session_state.run_id != rid: return
                 r = await coro
@@ -373,7 +399,7 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v43.3)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v43.6 MEGA 火力全開版)", use_container_width=True):
     st.session_state.valid_offers = []; asyncio.run(start_hunt())
 
 if st.session_state.valid_offers:
