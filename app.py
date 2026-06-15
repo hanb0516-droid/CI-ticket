@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v43.6 MEGA SPEED", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v43.7 MEGA SPEED", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -32,16 +32,14 @@ def get_hubs():
         "台灣": {"TPE": "台北桃園", "KHH": "高雄小港", "RMQ": "台中清泉崗"},
         "港澳": {"HKG": "香港", "MFM": "澳門"},
         "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山", "CJJ": "清州", "HKD": "函館", "SDJ": "仙台"},
-        "東南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
-        "中東/中亞": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "DEL": "新德里"},
-        "西歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑"},
-        "東歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙"},
-        "南歐": {"FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納"},
-        "北歐": {"CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基"},
-        "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華"},
-        "美東/中部": {"JFK": "紐約", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多", "DFW": "達拉斯"},
+        "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光", "DEL": "新德里", "BOM": "孟買"},
+        "中東/非洲": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "AUH": "阿布達比", "CAI": "開羅", "JNB": "約翰尼斯堡"},
+        "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都柏林"},
+        "東歐/南歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典"},
+        "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華", "LAS": "拉斯維加斯", "DEN": "丹佛", "HNL": "檀香山", "PHX": "鳳凰城", "SLC": "鹽湖城"},
+        "美東/中部": {"JFK": "紐約甘迺迪", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多", "DFW": "達拉斯", "MCO": "奧蘭多", "MIA": "邁阿密", "BOS": "波士頓", "ATL": "亞特蘭大", "IAD": "華盛頓", "DTW": "底特律", "MSP": "明尼亞波利斯"},
         "南美": {"GRU": "聖保羅", "EZE": "布宜諾斯艾利斯", "SCL": "聖地牙哥"},
-        "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭", "PER": "伯斯"}
+        "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭", "PER": "伯斯", "ADL": "阿德雷德", "CHC": "基督城"}
     }
     def flatten(h_dict): return [f"{code} ({name})" for r, cities in h_dict.items() for code, name in cities.items()]
     master_map = {}
@@ -135,12 +133,19 @@ def generate_matrix_html(res, ref, title, core_mode):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, version="v43.6"):
-    if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "信箱未設定"
+def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v43.7"):
+    if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "站長信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
     msg['From'] = S_SENDER
-    msg['To'] = S_RECEIVER
+    
+    # 智慧收件人與 BCC 機制
+    actual_receivers = [S_RECEIVER]
+    msg['To'] = S_RECEIVER  # 預設 To 站長
+    if user_email and "@" in user_email:
+        actual_receivers.append(user_email)
+        msg['To'] = user_email  # 若訪客有填寫，To 替換為訪客信箱，站長退居實際收件名單(發揮 BCC 效果)
+
     cab_map = {"BUSINESS": "商務艙", "PREMIUM_ECONOMY": "豪經艙", "ECONOMY": "經濟艙"}
     cab_zh = cab_map.get(cab, cab)
     cheapest = res[0]['total']
@@ -151,7 +156,7 @@ def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, versio
         diff_val = cheapest - bbb
         diff_label = "貴" if diff_val > 0 else "便宜"
         subj_focus = f"{res[0]['d2o']}➔{res[0]['d2d']}({res[0]['d2']}) / {res[0]['d3o']}➔{res[0]['d3d']}({res[0]['d3']})"
-        msg['Subject'] = f"✈️ [{version}] {cab_zh} {subj_focus} 核心精算表 (最低 {cheapest:,} TWD, 比起核心旅程 {diff_label} {abs(diff_val):,} TWD)"
+        msg['Subject'] = f"✈️ [{version}] {cab_zh} {subj_focus} 核心精算表 (最低 {cheapest:,} TWD)"
     else:
         core_val = aaa
         d1_path = f"{res[0]['h1']}➔{res[0]['d2o']}({res[0]['d1']})"
@@ -169,9 +174,12 @@ def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, versio
     warning = f"<p style='color:#e67e22;'>⚠️ 僅顯示前 100 筆最優結果確保寄達。</p>" if len(res) > 100 else ""
     body = f"{header}{stats_html}{warning}<h3>📋 票價排行榜 (Top 100)</h3>{generate_table_html(res, ref, core_val, core_mode, limit=100)}"
     msg.attach(MIMEText(f"<html><body>{body}</body></html>", 'html', 'utf-8'))
+    
     try:
+        # 使用 sendmail 才能完美達成 BCC 不在標頭漏餡的功能
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
-            s.starttls(); s.login(S_SENDER, S_PWD); s.send_message(msg)
+            s.starttls(); s.login(S_SENDER, S_PWD)
+            s.sendmail(S_SENDER, actual_receivers, msg.as_string())
         return True, ""
     except Exception as e:
         return False, repr(e)
@@ -237,12 +245,12 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v43.6 MEGA)")
+    st.header("⚙️ 獵殺控制台 (v43.7 MEGA)")
     core_mode = st.radio("🎯 核心旅程模式", ["A. 鎖定 D2/D3 (常規尋找便宜外站)", "B. 鎖定 D1/D4 (已知外站, 尋找主行程)"])
     st.divider()
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
     
-    # 修改為單選的三互斥選項
+    # 航空公司過濾
     airline_filter = st.radio("✈️ 航空公司過濾", [
         "🌸 華航限定 (直營/聯營)", 
         "🌳 長榮限定 (直營/聯營)", 
@@ -255,19 +263,27 @@ with st.sidebar:
     elif airline_filter == "🌳 長榮限定 (直營/聯營)":
         alliance_inc = st.checkbox("🤝 包含星空聯盟成員 (Star Alliance)", value=False)
         
-    # 🏎️ MEGA 解鎖：併發上限開放至 500
+    # 動態決定站點庫：只選純華航才用 CI_HUBS，若含聯盟或長榮、無限制，一律解鎖 ALL_HUBS 讓全地球站點都能飛
+    if airline_filter == "🌸 華航限定 (直營/聯營)" and not alliance_inc:
+        ACTIVE_HUBS = CI_HUBS
+        ACTIVE_CITIES = CI_CITIES
+    else:
+        ACTIVE_HUBS = ALL_HUBS
+        ACTIVE_CITIES = ALL_CITIES
+
     workers = st.slider("併發上限 (Mega火力全開)", 50, 500, 200)
-    
     show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     st.divider()
     use_manual_ref = st.checkbox("🛠️ 使用手動基準價", value=False)
     manual_ref_val = st.number_input("輸入市場參考總價 (TWD)", value=int(st.session_state.ref_price), step=1000)
+    
+    # 新增訪客 Email 功能
     email_on = st.checkbox("寄送 Email 報告", value=True)
-    if st.button("🛑 停止任務"): st.session_state.run_id = None; st.rerun()
+    user_email = ""
+    if email_on:
+        user_email = st.text_input("📩 接收報告的 Email (選填)", placeholder="留空則僅備份給站長")
 
-# 根據選擇載入對應的地點名單
-ACTIVE_HUBS = CI_HUBS if airline_filter == "🌸 華航限定 (直營/聯營)" else ALL_HUBS
-ACTIVE_CITIES = CI_CITIES if airline_filter == "🌸 華航限定 (直營/聯營)" else ALL_CITIES
+    if st.button("🛑 停止任務"): st.session_state.run_id = None; st.rerun()
 
 def safe_idx(target):
     for i, s in enumerate(ACTIVE_CITIES):
@@ -369,7 +385,6 @@ async def start_hunt():
 
         total_tasks = len(tasks); bar, status, live_table, final_res = st.progress(0), st.empty(), st.empty(), []
         
-        # 🏎️ MEGA 解鎖：動態配置 httpx 連線池上限，與 workers (最高500) 完美同步
         limits = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
         
         async with httpx.AsyncClient(limits=limits, timeout=40.0) as client:
@@ -411,13 +426,13 @@ async def start_hunt():
 
         st.session_state.valid_offers = sorted(final_res, key=lambda x: x['total']); live_table.empty()
         if email_on and st.session_state.valid_offers:
-            status.info("📧 封裝精算報告中..."); ok, err = send_detailed_email(st.session_state.valid_offers, cur_ref, st.session_state.perf_stats['time'], st.session_state.perf_stats['dps'], st.session_state.ref_aaa, st.session_state.ref_bbb, cab, core_mode)
+            status.info("📧 封裝精算報告中..."); ok, err = send_detailed_email(st.session_state.valid_offers, cur_ref, st.session_state.perf_stats['time'], st.session_state.perf_stats['dps'], st.session_state.ref_aaa, st.session_state.ref_bbb, cab, core_mode, user_email)
             if ok: st.success("📧 獵殺完成！已成功發送 Email。")
             else: st.error(f"🚨 Email 失敗: {err}")
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v43.6 MEGA 火力全開版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v43.7 MEGA 火力全開版)", use_container_width=True):
     st.session_state.valid_offers = []; asyncio.run(start_hunt())
 
 if st.session_state.valid_offers:
