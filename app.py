@@ -39,7 +39,7 @@ def get_hubs():
         "南歐": {"FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納"},
         "北歐": {"CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基"},
         "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華"},
-        "美東/中部": {"JFK": "紐約", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多"},
+        "美東/中部": {"JFK": "紐約", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多", "DFW": "達拉斯"},
         "南美": {"GRU": "聖保羅", "EZE": "布宜諾斯艾利斯", "SCL": "聖地牙哥"},
         "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭", "PER": "伯斯"}
     }
@@ -179,12 +179,14 @@ def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, versio
 # ==========================================
 # 2. 異步引擎
 # ==========================================
-async def fetch_api(client, sem, task_data, rid, ci_only_flag, skyteam_flag):
+async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
     if st.session_state.run_id != rid: return None
     legs, cabin, h1, d2o, d2d, d3o, d3d, h4, d1, d2, d3, d4 = task_data
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
+    
     SKYTEAM_CODES = {"CI", "AF", "KL", "DL", "KE", "MU", "MF", "VN", "GA", "AM", "AR", "UX", "KQ", "ME", "SV", "RO", "VS", "SK", "AZ"}
+    STAR_ALLIANCE_CODES = {"BR", "UA", "AC", "NH", "OZ", "SQ", "TG", "CA", "ZH", "NZ", "LH", "LX", "OS", "SN", "LO", "TK", "MS", "SA", "ET", "CM", "AV", "TP", "A3", "AI"}
 
     async with sem:
         for _ in range(2):
@@ -203,10 +205,17 @@ async def fetch_api(client, sem, task_data, rid, ci_only_flag, skyteam_flag):
                                 f = leg.get('flightInfo', {})
                                 c_info = f.get('carrierInfo', {})
                                 op, mk = c_info.get('operatingCarrier', ''), c_info.get('marketingCarrier', '')
-                                if ci_only_flag:
-                                    allowed_carriers = SKYTEAM_CODES if skyteam_flag else {"CI"}
+                                
+                                # 航空公司過濾邏輯
+                                if airline_mode == "🌸 華航限定 (直營/聯營)":
+                                    allowed_carriers = SKYTEAM_CODES if alliance_flag else {"CI"}
                                     if op not in allowed_carriers and mk not in allowed_carriers:
                                         is_valid_airline = False
+                                elif airline_mode == "🌳 長榮限定 (直營/聯營)":
+                                    allowed_carriers = STAR_ALLIANCE_CODES if alliance_flag else {"BR"}
+                                    if op not in allowed_carriers and mk not in allowed_carriers:
+                                        is_valid_airline = False
+                                
                                 l_sum.append(f"{mk or op}{f.get('flightNumber', '')}")
                         if is_valid_airline:
                             p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
@@ -233,10 +242,18 @@ with st.sidebar:
     st.divider()
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
     
-    ci_only = st.checkbox("🌸 華航限定 (直營/聯營)", value=True)
-    skyteam_inc = False
-    if ci_only:
-        skyteam_inc = st.checkbox("🤝 包含天合聯盟成員 (SkyTeam)", value=False)
+    # 修改為單選的三互斥選項
+    airline_filter = st.radio("✈️ 航空公司過濾", [
+        "🌸 華航限定 (直營/聯營)", 
+        "🌳 長榮限定 (直營/聯營)", 
+        "🌍 無限制航空公司"
+    ], index=0)
+    
+    alliance_inc = False
+    if airline_filter == "🌸 華航限定 (直營/聯營)":
+        alliance_inc = st.checkbox("🤝 包含天合聯盟成員 (SkyTeam)", value=False)
+    elif airline_filter == "🌳 長榮限定 (直營/聯營)":
+        alliance_inc = st.checkbox("🤝 包含星空聯盟成員 (Star Alliance)", value=False)
         
     # 🏎️ MEGA 解鎖：併發上限開放至 500
     workers = st.slider("併發上限 (Mega火力全開)", 50, 500, 200)
@@ -248,8 +265,9 @@ with st.sidebar:
     email_on = st.checkbox("寄送 Email 報告", value=True)
     if st.button("🛑 停止任務"): st.session_state.run_id = None; st.rerun()
 
-ACTIVE_HUBS = CI_HUBS if ci_only else ALL_HUBS
-ACTIVE_CITIES = CI_CITIES if ci_only else ALL_CITIES
+# 根據選擇載入對應的地點名單
+ACTIVE_HUBS = CI_HUBS if airline_filter == "🌸 華航限定 (直營/聯營)" else ALL_HUBS
+ACTIVE_CITIES = CI_CITIES if airline_filter == "🌸 華航限定 (直營/聯營)" else ALL_CITIES
 
 def safe_idx(target):
     for i, s in enumerate(ACTIVE_CITIES):
@@ -365,8 +383,8 @@ async def start_hunt():
                 l_bbb = [{"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix if not is_mode_b else b1_ref}.AIRPORT", "date": rd2.strftime("%Y-%m-%d")},
                          {"fromId": f"{d3o_fix if not is_mode_b else b2_ref}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": rd3.strftime("%Y-%m-%d")}]
                 
-                r_aaa = await fetch_api(client, asyncio.Semaphore(1), (l_aaa, cab, "REF", "REF", "REF", "REF", "REF", "REF", "", "", "", ""), rid, ci_only, skyteam_inc)
-                r_bbb = await fetch_api(client, asyncio.Semaphore(1), (l_bbb, cab, "REF", "REF", "REF", "REF", "REF", "REF", "", "", "", ""), rid, ci_only, skyteam_inc)
+                r_aaa = await fetch_api(client, asyncio.Semaphore(1), (l_aaa, cab, "REF", "REF", "REF", "REF", "REF", "REF", "", "", "", ""), rid, airline_filter, alliance_inc)
+                r_bbb = await fetch_api(client, asyncio.Semaphore(1), (l_bbb, cab, "REF", "REF", "REF", "REF", "REF", "REF", "", "", "", ""), rid, airline_filter, alliance_inc)
                 
                 aaa, bbb = (r_aaa['total'] if r_aaa else 0), (r_bbb['total'] if r_bbb else 0)
                 st.session_state.ref_aaa, st.session_state.ref_bbb, st.session_state.ref_price = aaa, bbb, aaa + bbb
@@ -374,7 +392,7 @@ async def start_hunt():
             cur_ref = manual_ref_val if use_manual_ref else st.session_state.ref_price; core_ref_live = bbb if not is_mode_b else aaa
             sem, start_t, last_upd = asyncio.Semaphore(workers), time.time(), 0
             
-            coros = [fetch_api(client, sem, t, rid, ci_only, skyteam_inc) for t in tasks]
+            coros = [fetch_api(client, sem, t, rid, airline_filter, alliance_inc) for t in tasks]
             
             for i, coro in enumerate(asyncio.as_completed(coros)):
                 if st.session_state.run_id != rid: return
