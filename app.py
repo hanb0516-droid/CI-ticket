@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v43.7 MEGA SPEED", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v43.8 MEGA SPEED", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -133,7 +133,7 @@ def generate_matrix_html(res, ref, title, core_mode):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v43.7"):
+def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v43.8"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "站長信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -245,7 +245,7 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v43.7 MEGA)")
+    st.header("⚙️ 獵殺控制台 (v43.8 MEGA)")
     core_mode = st.radio("🎯 核心旅程模式", ["A. 鎖定 D2/D3 (常規尋找便宜外站)", "B. 鎖定 D1/D4 (已知外站, 尋找主行程)"])
     st.divider()
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
@@ -271,7 +271,8 @@ with st.sidebar:
         ACTIVE_HUBS = ALL_HUBS
         ACTIVE_CITIES = ALL_CITIES
 
-    workers = st.slider("併發上限 (Mega火力全開)", 50, 500, 200)
+    # 預設改為 500，保留調整範圍 50-500 給使用者
+    workers = st.slider("併發上限 (Mega火力全開)", 50, 500, 500)
     show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     st.divider()
     use_manual_ref = st.checkbox("🛠️ 使用手動基準價", value=False)
@@ -281,7 +282,8 @@ with st.sidebar:
     email_on = st.checkbox("寄送 Email 報告", value=True)
     user_email = ""
     if email_on:
-        user_email = st.text_input("📩 接收報告的 Email (選填)", placeholder="留空則僅備份給站長")
+        # 佔位符文字已更新
+        user_email = st.text_input("📩 接收報告的 Email (選填)", placeholder="輸入你的Email")
 
     if st.button("🛑 停止任務"): st.session_state.run_id = None; st.rerun()
 
@@ -432,7 +434,7 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v43.7 MEGA 火力全開版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v43.8 MEGA 火力全開版)", use_container_width=True):
     st.session_state.valid_offers = []; asyncio.run(start_hunt())
 
 if st.session_state.valid_offers:
