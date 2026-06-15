@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v44.2 MEGA SPEED", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v44.3 MEGA SPEED", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -89,7 +89,7 @@ def generate_table_html(res, ref, core_ref, core_mode, limit=100):
     
     rows = []
     for r in display_res:
-        # 💡 Email 排版也同步升級：套用粗體與淺灰色 (Dark Mode 下 <b> 會自動反白，非常清晰)
+        # Email 表格專用的 HTML 排版
         if not is_mode_b:
             route_str = f"<b>{r['h1']}</b><span style='color:#888;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span><b>{r['h4']}</b>"
             date_str = f"<b>{r['d1'][5:]}</b><span style='color:#888;'> ➔ {r['d2'][5:]} ➔ {r['d3'][5:]} ➔ </span><b>{r['d4'][5:]}</b>"
@@ -152,7 +152,7 @@ def generate_matrix_html(res, ref, title, core_mode):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v44.2"):
+def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v44.3"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "站長信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -272,7 +272,7 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v44.2 MEGA)")
+    st.header("⚙️ 獵殺控制台 (v44.3 MEGA)")
     core_mode = st.radio("🎯 核心旅程模式", ["A. 鎖定 D2/D3 (常規尋找便宜外站)", "B. 鎖定 D1/D4 (已知外站, 尋找主行程)"])
     st.divider()
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
@@ -456,7 +456,7 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v44.2 MEGA 火力全開版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v44.3 MEGA 火力全開版)", use_container_width=True):
     st.session_state.valid_offers = []; asyncio.run(start_hunt())
 
 if st.session_state.valid_offers:
@@ -474,63 +474,52 @@ if st.session_state.valid_offers:
     st.markdown(banner_html, unsafe_allow_html=True)
     
     t1, t2 = st.tabs(["🏆 獲利排行榜", "📍 分站點矩陣"])
+    
+    # ==========================================
+    # 💡 完美修復版：使用原生 Markdown 表格取代 Raw HTML
+    # ==========================================
     with t1:
-        table_data = []
-        for r in st.session_state.valid_offers:
-            d = {"總價 (TWD)": f"{r['total']:,}"}
-            
-            if not is_mode_b: 
-                d["對比分開買省下"] = f"<span style='color:{'#d32f2f' if (cur_ref-r['total'])>=0 else '#1976d2'}'><b>{'省' if (cur_ref-r['total'])>=0 else '貴'} {abs(cur_ref-r['total']):,}</b></span>"
-            else: 
-                d["核心旅程票價"] = f"{r['total'] - core_ref:,}"
-            
-            # 💡 完美切換粗體與淺灰色
-            if not is_mode_b: 
-                d["探索路線"] = f"<b>{r['h1']}</b><span style='color:#888;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span><b>{r['h4']}</b>"
-                d["日期"] = f"<b>{r['d1'][5:]}</b><span style='color:#888;'> ➔ {r['d2'][5:]} ➔ {r['d3'][5:]} ➔ </span><b>{r['d4'][5:]}</b>"
-            else: 
-                d["探索路線"] = f"<span style='color:#888;'>【 {r['h1']}➔{r['d2o']} 】 {r['d2o']}➔</span><b>{r['d2d']}</b> <span style='color:#888;'>|</span> <b>{r['d3o']}</b><span style='color:#888;'>➔{r['d3d']} 【 {r['d3d']}➔{r['h4']} 】</span>"
-                d["日期"] = f"<span style='color:#888;'>{r['d1'][5:]} ➔ </span><b>{r['d2'][5:]}</b><span style='color:#888;'> ➔ </span><b>{r['d3'][5:]}</b><span style='color:#888;'> ➔ {r['d4'][5:]}</span>"
-            
-            # 把航班全部變淺灰，避免版面太亂
-            d["D1航班"] = f"<span style='color:#888;'>{r['legs'][0]}</span>" if len(r['legs']) > 0 else ""
-            d["D2航班"] = f"<span style='color:#888;'>{r['legs'][1]}</span>" if len(r['legs']) > 1 else ""
-            d["D3航班"] = f"<span style='color:#888;'>{r['legs'][2]}</span>" if len(r['legs']) > 2 else ""
-            d["D4航班"] = f"<span style='color:#888;'>{r['legs'][3]}</span>" if len(r['legs']) > 3 else ""
-            
-            table_data.append(d)
-            
-        # 💡 強制讓 Streamlit 渲染這張帶有顏色與粗體的精緻 HTML 報表
-        df = pd.DataFrame(table_data)
-        with pd.option_context('display.max_colwidth', None):
-            html_table = df.to_html(escape=False, index=False, justify='center')
+        md_table = []
         
-        css = """
-        <style>
-        .custom-dataframe {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-            text-align: center;
-        }
-        .custom-dataframe th {
-            background-color: rgba(128,128,128,0.1);
-            padding: 10px;
-            border-bottom: 1px solid rgba(128,128,128,0.3);
-            opacity: 0.8;
-            font-weight: 600;
-        }
-        .custom-dataframe td {
-            padding: 8px 10px;
-            border-bottom: 1px solid rgba(128,128,128,0.2);
-        }
-        .custom-dataframe tr:hover {
-            background-color: rgba(128,128,128,0.1);
-        }
-        </style>
-        """
-        html_table = html_table.replace('<table border="1" class="dataframe">', '<table class="custom-dataframe">')
-        st.markdown(css + "<div style='overflow-x: auto; margin-bottom: 20px;'>" + html_table + "</div>", unsafe_allow_html=True)
+        # 1. 建立 Markdown 表格標題列
+        if not is_mode_b:
+            md_table.append("| 總價(TWD) | 對比分開買省下 | 探索路線 | MM-DD 日期組合 | D1航班 | D2航班 | D3航班 | D4航班 |")
+        else:
+            md_table.append("| 總價(TWD) | 核心旅程票價 | 探索路線 | MM-DD 日期組合 | D1航班 | D2航班 | D3航班 | D4航班 |")
+            
+        md_table.append("|:---|:---|:---|:---|:---|:---|:---|:---|")
+        
+        # 2. 依序填入每一列的資料
+        for r in st.session_state.valid_offers:
+            price_str = f"{r['total']:,}"
+            
+            # 獲利金額計算
+            if not is_mode_b:
+                diff = cur_ref - r['total']
+                color = "#d32f2f" if diff >= 0 else "#1976d2"
+                label = "省" if diff >= 0 else "貴"
+                diff_str = f"<span style='color:{color}'>**{label} {abs(diff):,}**</span>"
+                
+                # 路線與日期：D1/D4 (粗體) + D2/D3 (淺灰)
+                route_str = f"**{r['h1']}**<span style='color:#888;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} &#124; {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span>**{r['h4']}**"
+                date_str = f"**{r['d1'][5:]}**<span style='color:#888;'> ➔ {r['d2'][5:]} ➔ {r['d3'][5:]} ➔ </span>**{r['d4'][5:]}**"
+            else:
+                diff_str = f"{r['total'] - core_ref:,}"
+                
+                # 路線與日期：反過來凸顯主行程
+                route_str = f"<span style='color:#888;'>【 {r['h1']}➔{r['d2o']} 】 {r['d2o']}➔</span>**{r['d2d']}** <span style='color:#888;'>&#124;</span> **{r['d3o']}**<span style='color:#888;'>➔{r['d3d']} 【 {r['d3d']}➔{r['h4']} 】</span>"
+                date_str = f"<span style='color:#888;'>{r['d1'][5:]} ➔ </span>**{r['d2'][5:]}**<span style='color:#888;'> ➔ </span>**{r['d3'][5:]}**<span style='color:#888;'> ➔ {r['d4'][5:]}</span>"
+            
+            # 航班資訊：全部改為淺灰色。且將字串中的 "|" 取代為 HTML 特殊字元 "&#124;" 防止破壞 Markdown 表格
+            f1 = f"<span style='color:#888;'>{r['legs'][0].replace('|', '&#124;')}</span>" if len(r['legs']) > 0 else ""
+            f2 = f"<span style='color:#888;'>{r['legs'][1].replace('|', '&#124;')}</span>" if len(r['legs']) > 1 else ""
+            f3 = f"<span style='color:#888;'>{r['legs'][2].replace('|', '&#124;')}</span>" if len(r['legs']) > 2 else ""
+            f4 = f"<span style='color:#888;'>{r['legs'][3].replace('|', '&#124;')}</span>" if len(r['legs']) > 3 else ""
+            
+            md_table.append(f"| {price_str} | {diff_str} | {route_str} | {date_str} | {f1} | {f2} | {f3} | {f4} |")
+            
+        # 3. 渲染為原生 Markdown，享受 Streamlit 最順暢的表格 UI
+        st.markdown("\n".join(md_table), unsafe_allow_html=True)
         
     with t2:
         if not is_mode_b:
