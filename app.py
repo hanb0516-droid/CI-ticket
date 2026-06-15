@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v43.9", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v44.0 MEGA SPEED", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -81,22 +81,24 @@ def generate_table_html(res, ref, core_ref, core_mode, limit=100):
     
     header = "<tr style='background:#333;color:#fff;'><th>總價(TWD)</th>"
     if not is_mode_b:
-        header += "<th>獲利(雙基準)</th>"
-    
-    # 移除比較核心旅程，加入拆解的 4 個航班欄位
+        # 💡 將獲利雙基準改為更易懂的名稱
+        header += "<th>對比分開買省下</th>"
+    else:
+        header += "<th>核心旅程票價</th>"
+        
     header += "<th>探索路線</th><th>MM-DD 日期組合</th><th>D1航班</th><th>D2航班</th><th>D3航班</th><th>D4航班</th></tr>"
     
     rows = []
     for r in display_res:
-        # 探索路線改成完整的 D1 | D2 | D3 | D4
         route_str = f"{r['h1']}➔{r['d2o']} | {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} | {r['d3d']}➔{r['h4']}"
         date_str = f"{r['d1'][5:]} ➔ {r['d2'][5:]} ➔ {r['d3'][5:]} ➔ {r['d4'][5:]}"
         
         row_html = f"<tr><td>{r['total']:,}</td>"
         if not is_mode_b:
             row_html += f"<td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td>"
-        
-        # 航班拆解
+        else:
+            row_html += f"<td>{r['total'] - core_ref:,}</td>"
+            
         f1 = r['legs'][0] if len(r['legs']) > 0 else ""
         f2 = r['legs'][1] if len(r['legs']) > 1 else ""
         f3 = r['legs'][2] if len(r['legs']) > 2 else ""
@@ -146,18 +148,17 @@ def generate_matrix_html(res, ref, title, core_mode):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v43.9"):
+def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v44.0"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "站長信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
     msg['From'] = S_SENDER
     
-    # 智慧收件人與 BCC 機制
     actual_receivers = [S_RECEIVER]
-    msg['To'] = S_RECEIVER  # 預設 To 站長
+    msg['To'] = S_RECEIVER  
     if user_email and "@" in user_email:
         actual_receivers.append(user_email)
-        msg['To'] = user_email  # 若訪客有填寫，To 替換為訪客信箱，站長退居實際收件名單(發揮 BCC 效果)
+        msg['To'] = user_email  
 
     cab_map = {"BUSINESS": "商務艙", "PREMIUM_ECONOMY": "豪經艙", "ECONOMY": "經濟艙"}
     cab_zh = cab_map.get(cab, cab)
@@ -178,13 +179,13 @@ def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_e
         
     header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>版本：{version} {'核心旅程定錨' if is_mode_b else '外站比價'}報告</h2><p>時間：{now_str}</p></div>"
     stats_content = f"<b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br><b>⚡ 平均 DPS (RPS)：</b> {dps:.2f} 筆/秒<br>"
+    
+    # 💡 在 Email 中也清楚顯示總市價與拆分邏輯
     if not is_mode_b:
-        stats_content += f"<b>🎯 當前對標基準價：</b> 接駁來回({aaa:,}) + 主行程({bbb:,}) = {ref:,} TWD<br>"
+        stats_content += f"<b>💰 傳統分開買總市價：</b> {ref:,} TWD (包含主行程 {core_val:,} + 接駁段 {abs(ref-core_val):,})<br>"
     else:
         stats_content += f"<b>📍 已知固定接駁成本 (D1/D4)：</b> {aaa:,} TWD<br>"
     
-    # 信件內文也加入核心旅程參考價格
-    stats_content += f"<b>💎 核心旅程參考價格：</b> {core_val:,} TWD<br>"
     stats_content += f"<b>🏆 尋獲組合：</b> {len(res)} 組"
     
     stats_html = f"<div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px; color:#333;'>{stats_content}</div>"
@@ -193,7 +194,6 @@ def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_e
     msg.attach(MIMEText(f"<html><body>{body}</body></html>", 'html', 'utf-8'))
     
     try:
-        # 使用 sendmail 才能完美達成 BCC 不在標頭漏餡的功能
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
             s.starttls(); s.login(S_SENDER, S_PWD)
             s.sendmail(S_SENDER, actual_receivers, msg.as_string())
@@ -232,7 +232,6 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
                                 c_info = f.get('carrierInfo', {})
                                 op, mk = c_info.get('operatingCarrier', ''), c_info.get('marketingCarrier', '')
                                 
-                                # 航空公司過濾邏輯
                                 if airline_mode == "🌸 華航限定 (直營/聯營)":
                                     allowed_carriers = SKYTEAM_CODES if alliance_flag else {"CI"}
                                     if op not in allowed_carriers and mk not in allowed_carriers:
@@ -244,13 +243,11 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
                                 
                                 seg_flights.append(f"{mk or op}{f.get('flightNumber', '')}")
                             
-                            # 把同一段(Segment)的轉機航班用 '|' 串接
                             l_sum.append("|".join(seg_flights))
                             
                         if is_valid_airline:
                             p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
                             
-                            # 確保長度一定是 4 段，避免後續取 index 報錯
                             while len(l_sum) < 4:
                                 l_sum.append("")
                                 
@@ -272,12 +269,11 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v43.9 MEGA)")
+    st.header("⚙️ 獵殺控制台 (v44.0 MEGA)")
     core_mode = st.radio("🎯 核心旅程模式", ["A. 鎖定 D2/D3 (常規尋找便宜外站)", "B. 鎖定 D1/D4 (已知外站, 尋找主行程)"])
     st.divider()
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
     
-    # 航空公司過濾
     airline_filter = st.radio("✈️ 航空公司過濾", [
         "🌸 華航限定 (直營/聯營)", 
         "🌳 長榮限定 (直營/聯營)", 
@@ -290,7 +286,6 @@ with st.sidebar:
     elif airline_filter == "🌳 長榮限定 (直營/聯營)":
         alliance_inc = st.checkbox("🤝 包含星空聯盟成員 (Star Alliance)", value=False)
         
-    # 動態決定站點庫：只選純華航才用 CI_HUBS，若含聯盟或長榮、無限制，一律解鎖 ALL_HUBS 讓全地球站點都能飛
     if airline_filter == "🌸 華航限定 (直營/聯營)" and not alliance_inc:
         ACTIVE_HUBS = CI_HUBS
         ACTIVE_CITIES = CI_CITIES
@@ -298,14 +293,12 @@ with st.sidebar:
         ACTIVE_HUBS = ALL_HUBS
         ACTIVE_CITIES = ALL_CITIES
 
-    # 預設改為 500，保留調整範圍 50-500 給使用者
     workers = st.slider("併發上限 (Mega火力全開)", 50, 500, 500)
     show_all = st.checkbox("👁️ 透視模式 (顯示賠錢票)", value=True)
     st.divider()
     use_manual_ref = st.checkbox("🛠️ 使用手動基準價", value=False)
     manual_ref_val = st.number_input("輸入市場參考總價 (TWD)", value=int(st.session_state.ref_price), step=1000)
     
-    # 新增訪客 Email 功能
     email_on = st.checkbox("寄送 Email 報告", value=True)
     user_email = ""
     if email_on:
@@ -460,28 +453,36 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v43.9 MEGA 火力全開版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v44.0 MEGA 火力全開版)", use_container_width=True):
     st.session_state.valid_offers = []; asyncio.run(start_hunt())
 
 if st.session_state.valid_offers:
     st.markdown("---")
     cur_ref = manual_ref_val if use_manual_ref else st.session_state.ref_price; core_ref = st.session_state.ref_bbb if not is_mode_b else st.session_state.ref_aaa; p = st.session_state.perf_stats
     
-    # 加入了💎核心旅程參考價格的綠色橫幅
-    st.markdown(f"<div style='background:rgba(0,230,118,0.1); padding:15px; border-radius:8px; border-left:5px solid #00e676; margin-bottom:20px;'><b>⏱️ {p.get('time',0):.2f} 秒</b> | <b>⚡ {p.get('dps',0):.2f} 筆/秒</b> | <b>🏆 {len(st.session_state.valid_offers)} 組</b> | <b>💎 核心旅程參考價格： {core_ref:,} TWD</b></div>", unsafe_allow_html=True)
+    # 💡 重新排版綠色橫幅，把「雙基準」這件事用白話文與詳細算式直接印在畫面上
+    banner_html = f"""
+    <div style='background:rgba(0,230,118,0.1); padding:15px; border-radius:8px; border-left:5px solid #00e676; margin-bottom:20px;'>
+        <b>⏱️ {p.get('time',0):.2f} 秒</b> | <b>⚡ {p.get('dps',0):.2f} 筆/秒</b> | <b>🏆 {len(st.session_state.valid_offers)} 組</b>
+        <br><br>
+        <span style='font-size:1.1em;'><b>💰 傳統分開買總市價： {cur_ref:,} TWD</b></span> 
+        <span style='color:#2e7d32; font-weight:500;'> (包含核心主行程 {core_ref:,} + 亞洲接駁段估值 {abs(cur_ref-core_ref):,})</span>
+    </div>
+    """
+    st.markdown(banner_html, unsafe_allow_html=True)
     
     t1, t2 = st.tabs(["🏆 獲利排行榜", "📍 分站點矩陣"])
     with t1:
         table_data = []
         for r in st.session_state.valid_offers:
             d = {"總價 (TWD)": f"{r['total']:,}"}
-            if not is_mode_b: d["獲利 (雙基準)"] = f"{cur_ref-r['total']:+,}"
             
-            # 探索路線與日期更新
+            # 💡 這裡將資料綁定到新的欄位名稱
+            if not is_mode_b: d["對比分開買省下"] = f"{cur_ref-r['total']:+,}"
+            
             d["探索路線"] = f"{r['h1']}➔{r['d2o']} | {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} | {r['d3d']}➔{r['h4']}"
             d["日期"] = f"{r['d1'][5:]} ➔ {r['d2'][5:]} ➔ {r['d3'][5:]} ➔ {r['d4'][5:]}"
             
-            # 航班拆分為 4 欄
             d["D1航班"] = r['legs'][0] if len(r['legs']) > 0 else ""
             d["D2航班"] = r['legs'][1] if len(r['legs']) > 1 else ""
             d["D3航班"] = r['legs'][2] if len(r['legs']) > 2 else ""
