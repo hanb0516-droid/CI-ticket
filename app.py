@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v43.8 MEGA SPEED", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v43.8", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
