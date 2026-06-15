@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v44.0 MEGA SPEED", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v44.2 MEGA SPEED", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -81,7 +81,6 @@ def generate_table_html(res, ref, core_ref, core_mode, limit=100):
     
     header = "<tr style='background:#333;color:#fff;'><th>總價(TWD)</th>"
     if not is_mode_b:
-        # 💡 將獲利雙基準改為更易懂的名稱
         header += "<th>對比分開買省下</th>"
     else:
         header += "<th>核心旅程票價</th>"
@@ -90,8 +89,13 @@ def generate_table_html(res, ref, core_ref, core_mode, limit=100):
     
     rows = []
     for r in display_res:
-        route_str = f"{r['h1']}➔{r['d2o']} | {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} | {r['d3d']}➔{r['h4']}"
-        date_str = f"{r['d1'][5:]} ➔ {r['d2'][5:]} ➔ {r['d3'][5:]} ➔ {r['d4'][5:]}"
+        # 💡 Email 排版也同步升級：套用粗體與淺灰色 (Dark Mode 下 <b> 會自動反白，非常清晰)
+        if not is_mode_b:
+            route_str = f"<b>{r['h1']}</b><span style='color:#888;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span><b>{r['h4']}</b>"
+            date_str = f"<b>{r['d1'][5:]}</b><span style='color:#888;'> ➔ {r['d2'][5:]} ➔ {r['d3'][5:]} ➔ </span><b>{r['d4'][5:]}</b>"
+        else:
+            route_str = f"<span style='color:#888;'>【 {r['h1']}➔{r['d2o']} 】 {r['d2o']}➔</span><b>{r['d2d']}</b> <span style='color:#888;'>|</span> <b>{r['d3o']}</b><span style='color:#888;'>➔{r['d3d']} 【 {r['d3d']}➔{r['h4']} 】</span>"
+            date_str = f"<span style='color:#888;'>{r['d1'][5:]} ➔ </span><b>{r['d2'][5:]}</b><span style='color:#888;'> ➔ </span><b>{r['d3'][5:]}</b><span style='color:#888;'> ➔ {r['d4'][5:]}</span>"
         
         row_html = f"<tr><td>{r['total']:,}</td>"
         if not is_mode_b:
@@ -106,10 +110,10 @@ def generate_table_html(res, ref, core_ref, core_mode, limit=100):
         
         row_html += f"<td><span style='font-size:11px;'>{route_str}</span></td>"
         row_html += f"<td><span style='font-size:11px;'>{date_str}</span></td>"
-        row_html += f"<td><span style='font-size:10px;'>{f1}</span></td>"
-        row_html += f"<td><span style='font-size:10px;'>{f2}</span></td>"
-        row_html += f"<td><span style='font-size:10px;'>{f3}</span></td>"
-        row_html += f"<td><span style='font-size:10px;'>{f4}</span></td></tr>"
+        row_html += f"<td><span style='font-size:10px; color:#888;'>{f1}</span></td>"
+        row_html += f"<td><span style='font-size:10px; color:#888;'>{f2}</span></td>"
+        row_html += f"<td><span style='font-size:10px; color:#888;'>{f3}</span></td>"
+        row_html += f"<td><span style='font-size:10px; color:#888;'>{f4}</span></td></tr>"
         rows.append(row_html)
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
 
@@ -148,7 +152,7 @@ def generate_matrix_html(res, ref, title, core_mode):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v44.0"):
+def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v44.2"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "站長信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -180,7 +184,6 @@ def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_e
     header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>版本：{version} {'核心旅程定錨' if is_mode_b else '外站比價'}報告</h2><p>時間：{now_str}</p></div>"
     stats_content = f"<b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br><b>⚡ 平均 DPS (RPS)：</b> {dps:.2f} 筆/秒<br>"
     
-    # 💡 在 Email 中也清楚顯示總市價與拆分邏輯
     if not is_mode_b:
         stats_content += f"<b>💰 傳統分開買總市價：</b> {ref:,} TWD (包含主行程 {core_val:,} + 接駁段 {abs(ref-core_val):,})<br>"
     else:
@@ -269,7 +272,7 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v44.0 MEGA)")
+    st.header("⚙️ 獵殺控制台 (v44.2 MEGA)")
     core_mode = st.radio("🎯 核心旅程模式", ["A. 鎖定 D2/D3 (常規尋找便宜外站)", "B. 鎖定 D1/D4 (已知外站, 尋找主行程)"])
     st.divider()
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
@@ -453,20 +456,19 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v44.0 MEGA 火力全開版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v44.2 MEGA 火力全開版)", use_container_width=True):
     st.session_state.valid_offers = []; asyncio.run(start_hunt())
 
 if st.session_state.valid_offers:
     st.markdown("---")
     cur_ref = manual_ref_val if use_manual_ref else st.session_state.ref_price; core_ref = st.session_state.ref_bbb if not is_mode_b else st.session_state.ref_aaa; p = st.session_state.perf_stats
     
-    # 💡 重新排版綠色橫幅，把「雙基準」這件事用白話文與詳細算式直接印在畫面上
     banner_html = f"""
     <div style='background:rgba(0,230,118,0.1); padding:15px; border-radius:8px; border-left:5px solid #00e676; margin-bottom:20px;'>
         <b>⏱️ {p.get('time',0):.2f} 秒</b> | <b>⚡ {p.get('dps',0):.2f} 筆/秒</b> | <b>🏆 {len(st.session_state.valid_offers)} 組</b>
         <br><br>
         <span style='font-size:1.1em;'><b>💰 傳統分開買總市價： {cur_ref:,} TWD</b></span> 
-        <span style='color:#2e7d32; font-weight:500;'> (包含核心主行程 {core_ref:,} + 亞洲接駁段估值 {abs(cur_ref-core_ref):,})</span>
+        <span style='color:#2e7d32; font-weight:500;'> (包含核心主行程 {core_ref:,} + 接駁段估值 {abs(cur_ref-core_ref):,})</span>
     </div>
     """
     st.markdown(banner_html, unsafe_allow_html=True)
@@ -477,19 +479,59 @@ if st.session_state.valid_offers:
         for r in st.session_state.valid_offers:
             d = {"總價 (TWD)": f"{r['total']:,}"}
             
-            # 💡 這裡將資料綁定到新的欄位名稱
-            if not is_mode_b: d["對比分開買省下"] = f"{cur_ref-r['total']:+,}"
+            if not is_mode_b: 
+                d["對比分開買省下"] = f"<span style='color:{'#d32f2f' if (cur_ref-r['total'])>=0 else '#1976d2'}'><b>{'省' if (cur_ref-r['total'])>=0 else '貴'} {abs(cur_ref-r['total']):,}</b></span>"
+            else: 
+                d["核心旅程票價"] = f"{r['total'] - core_ref:,}"
             
-            d["探索路線"] = f"{r['h1']}➔{r['d2o']} | {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} | {r['d3d']}➔{r['h4']}"
-            d["日期"] = f"{r['d1'][5:]} ➔ {r['d2'][5:]} ➔ {r['d3'][5:]} ➔ {r['d4'][5:]}"
+            # 💡 完美切換粗體與淺灰色
+            if not is_mode_b: 
+                d["探索路線"] = f"<b>{r['h1']}</b><span style='color:#888;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span><b>{r['h4']}</b>"
+                d["日期"] = f"<b>{r['d1'][5:]}</b><span style='color:#888;'> ➔ {r['d2'][5:]} ➔ {r['d3'][5:]} ➔ </span><b>{r['d4'][5:]}</b>"
+            else: 
+                d["探索路線"] = f"<span style='color:#888;'>【 {r['h1']}➔{r['d2o']} 】 {r['d2o']}➔</span><b>{r['d2d']}</b> <span style='color:#888;'>|</span> <b>{r['d3o']}</b><span style='color:#888;'>➔{r['d3d']} 【 {r['d3d']}➔{r['h4']} 】</span>"
+                d["日期"] = f"<span style='color:#888;'>{r['d1'][5:]} ➔ </span><b>{r['d2'][5:]}</b><span style='color:#888;'> ➔ </span><b>{r['d3'][5:]}</b><span style='color:#888;'> ➔ {r['d4'][5:]}</span>"
             
-            d["D1航班"] = r['legs'][0] if len(r['legs']) > 0 else ""
-            d["D2航班"] = r['legs'][1] if len(r['legs']) > 1 else ""
-            d["D3航班"] = r['legs'][2] if len(r['legs']) > 2 else ""
-            d["D4航班"] = r['legs'][3] if len(r['legs']) > 3 else ""
+            # 把航班全部變淺灰，避免版面太亂
+            d["D1航班"] = f"<span style='color:#888;'>{r['legs'][0]}</span>" if len(r['legs']) > 0 else ""
+            d["D2航班"] = f"<span style='color:#888;'>{r['legs'][1]}</span>" if len(r['legs']) > 1 else ""
+            d["D3航班"] = f"<span style='color:#888;'>{r['legs'][2]}</span>" if len(r['legs']) > 2 else ""
+            d["D4航班"] = f"<span style='color:#888;'>{r['legs'][3]}</span>" if len(r['legs']) > 3 else ""
             
             table_data.append(d)
-        st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+            
+        # 💡 強制讓 Streamlit 渲染這張帶有顏色與粗體的精緻 HTML 報表
+        df = pd.DataFrame(table_data)
+        with pd.option_context('display.max_colwidth', None):
+            html_table = df.to_html(escape=False, index=False, justify='center')
+        
+        css = """
+        <style>
+        .custom-dataframe {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            text-align: center;
+        }
+        .custom-dataframe th {
+            background-color: rgba(128,128,128,0.1);
+            padding: 10px;
+            border-bottom: 1px solid rgba(128,128,128,0.3);
+            opacity: 0.8;
+            font-weight: 600;
+        }
+        .custom-dataframe td {
+            padding: 8px 10px;
+            border-bottom: 1px solid rgba(128,128,128,0.2);
+        }
+        .custom-dataframe tr:hover {
+            background-color: rgba(128,128,128,0.1);
+        }
+        </style>
+        """
+        html_table = html_table.replace('<table border="1" class="dataframe">', '<table class="custom-dataframe">')
+        st.markdown(css + "<div style='overflow-x: auto; margin-bottom: 20px;'>" + html_table + "</div>", unsafe_allow_html=True)
+        
     with t2:
         if not is_mode_b:
             routes = sorted(list(set(f"{r['h1']} ➔ {r['h4']}" for r in st.session_state.valid_offers)))
