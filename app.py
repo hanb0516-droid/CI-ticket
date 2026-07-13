@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v44.4 MEGA SPEED", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v44.6 MEGA SPEED", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -24,9 +24,9 @@ def get_hubs():
         "港澳": {"HKG": "香港", "MFM": "澳門"},
         "東南亞": {"BKK": "曼谷", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光"},
         "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
-        "歐洲": {"FRA": "法蘭克福", "AMS": "阿姆斯特丹", "LHR": "倫敦", "VIE": "維也納", "FCO": "羅馬", "PRG": "布拉格"},
-        "北美洲": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "JFK": "紐約", "YVR": "溫哥華"},
-        "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
+        "歐洲": {"FRA": "法蘭克福", "AMS": "阿姆斯特丹", "LHR": "倫敦", "VIE": "維也納", "FCO": "羅馬", "PRG": "布拉格", "CPH": "哥本哈根", "CDG": "巴黎", "MUC": "慕尼黑", "MAD": "馬德里", "BCN": "巴塞隆納", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基"},
+        "北美洲": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "JFK": "紐約", "YVR": "溫哥華", "ORD": "芝加哥", "IAH": "休士頓", "DFW": "達拉斯", "BOS": "波士頓", "ATL": "亞特蘭大", "MCO": "奧蘭多", "LAS": "拉斯維加斯"},
+        "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭", "PER": "伯斯", "CHC": "基督城"}
     }
     all_h = {
         "台灣": {"TPE": "台北桃園", "KHH": "高雄小港", "RMQ": "台中清泉崗"},
@@ -92,13 +92,11 @@ def generate_table_html(res, ref, core_ref, core_mode, limit=100):
         row_html = f"<tr><td>{r['total']:,}</td>"
         if not is_mode_b:
             row_html += f"<td><span style='color:{'#d32f2f' if (ref-r['total'])>=0 else '#1976d2'}'>{'省' if (ref-r['total'])>=0 else '貴'} {abs(ref-r['total']):,}</span></td>"
-            # 💡 加入國字站點與日期
             row_html += f"<td><b>{r['h1']} {AIRPORT_MAP.get(r['h1'], '')}</b> - {r['d1'][5:].replace('-', '/')}</td>"
             row_html += f"<td><b>{r['h4']} {AIRPORT_MAP.get(r['h4'], '')}</b> - {r['d4'][5:].replace('-', '/')}</td>"
             route_str = f"<b>{r['h1']}</b><span style='color:#888;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span><b>{r['h4']}</b>"
         else:
             row_html += f"<td>{r['total'] - core_ref:,}</td>"
-            # 💡 B模式則顯示 D2/D3
             row_html += f"<td><b>{r['d2d']} {AIRPORT_MAP.get(r['d2d'], '')}</b> - {r['d2'][5:].replace('-', '/')}</td>"
             row_html += f"<td><b>{r['d3o']} {AIRPORT_MAP.get(r['d3o'], '')}</b> - {r['d3'][5:].replace('-', '/')}</td>"
             route_str = f"<span style='color:#888;'>【 {r['h1']}➔{r['d2o']} 】 {r['d2o']}➔</span><b>{r['d2d']}</b> <span style='color:#888;'>|</span> <b>{r['d3o']}</b><span style='color:#888;'>➔{r['d3d']} 【 {r['d3d']}➔{r['h4']} 】</span>"
@@ -151,7 +149,7 @@ def generate_matrix_html(res, ref, title, core_mode):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v44.4"):
+def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v44.6"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "站長信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -229,6 +227,9 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
                         is_valid_airline = True
                         for seg in o.get('segments', []):
                             seg_flights = []
+                            # 💡 v44.6 升級邏輯：只要這個「大區段」裡有任何一段是目標航空，就給過！
+                            segment_valid = False 
+                            
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
                                 c_info = f.get('carrierInfo', {})
@@ -236,15 +237,20 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
                                 
                                 if airline_mode == "🌸 華航限定 (直營/聯營)":
                                     allowed_carriers = SKYTEAM_CODES if alliance_flag else {"CI"}
-                                    if op not in allowed_carriers and mk not in allowed_carriers:
-                                        is_valid_airline = False
+                                    if op in allowed_carriers or mk in allowed_carriers:
+                                        segment_valid = True
                                 elif airline_mode == "🌳 長榮限定 (直營/聯營)":
                                     allowed_carriers = STAR_ALLIANCE_CODES if alliance_flag else {"BR"}
-                                    if op not in allowed_carriers and mk not in allowed_carriers:
-                                        is_valid_airline = False
+                                    if op in allowed_carriers or mk in allowed_carriers:
+                                        segment_valid = True
+                                else:
+                                    segment_valid = True
                                 
                                 seg_flights.append(f"{mk or op}{f.get('flightNumber', '')}")
                             
+                            if airline_mode != "🌍 無限制航空公司" and not segment_valid:
+                                is_valid_airline = False
+                                
                             l_sum.append("|".join(seg_flights))
                             
                         if is_valid_airline:
@@ -271,7 +277,7 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v44.4 MEGA)")
+    st.header("⚙️ 獵殺控制台 (v44.6 MEGA)")
     core_mode = st.radio("🎯 核心旅程模式", ["A. 鎖定 D2/D3 (常規尋找便宜外站)", "B. 鎖定 D1/D4 (已知外站, 尋找主行程)"])
     st.divider()
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
@@ -455,7 +461,7 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v44.4 MEGA 火力全開版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v44.6 MEGA 火力全開版)", use_container_width=True):
     st.session_state.valid_offers = []; asyncio.run(start_hunt())
 
 if st.session_state.valid_offers:
@@ -474,13 +480,9 @@ if st.session_state.valid_offers:
     
     t1, t2 = st.tabs(["🏆 獲利排行榜", "📍 分站點矩陣"])
     
-    # ==========================================
-    # 💡 完美修復版：使用原生 Markdown 表格取代 Raw HTML
-    # ==========================================
     with t1:
         md_table = []
         
-        # 1. 建立 Markdown 表格標題列 (移除 MM-DD 欄位，新增獨立的站點/日期)
         if not is_mode_b:
             md_table.append("| 總價(TWD) | 對比分開買省下 | D1 站點/日期 | D4 站點/日期 | 探索路線 | D1航班 | D2航班 | D3航班 | D4航班 |")
         else:
@@ -488,11 +490,9 @@ if st.session_state.valid_offers:
             
         md_table.append("|:---|:---|:---|:---|:---|:---|:---|:---|:---|")
         
-        # 2. 依序填入每一列的資料
         for r in st.session_state.valid_offers:
             price_str = f"{r['total']:,}"
             
-            # 航班資訊：全部改為淺灰色。將字串中的 "|" 取代為 HTML 特殊字元 "&#124;" 防止破壞 Markdown 表格
             f1 = f"<span style='color:#888;'>{r['legs'][0].replace('|', '&#124;')}</span>" if len(r['legs']) > 0 else ""
             f2 = f"<span style='color:#888;'>{r['legs'][1].replace('|', '&#124;')}</span>" if len(r['legs']) > 1 else ""
             f3 = f"<span style='color:#888;'>{r['legs'][2].replace('|', '&#124;')}</span>" if len(r['legs']) > 2 else ""
@@ -504,27 +504,22 @@ if st.session_state.valid_offers:
                 label = "省" if diff >= 0 else "貴"
                 diff_str = f"<span style='color:{color}'>**{label} {abs(diff):,}**</span>"
                 
-                # 獨立的 D1 / D4 欄位：抓取機場名稱與日期
                 loc1_str = f"**{r['h1']} {AIRPORT_MAP.get(r['h1'], '')}** - {r['d1'][5:].replace('-', '/')}"
                 loc4_str = f"**{r['h4']} {AIRPORT_MAP.get(r['h4'], '')}** - {r['d4'][5:].replace('-', '/')}"
                 
-                # 路線：D1/D4 (粗體) + D2/D3 (淺灰)
                 route_str = f"**{r['h1']}**<span style='color:#888;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} &#124; {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span>**{r['h4']}**"
                 
                 md_table.append(f"| {price_str} | {diff_str} | {loc1_str} | {loc4_str} | {route_str} | {f1} | {f2} | {f3} | {f4} |")
             else:
                 diff_str = f"{r['total'] - core_ref:,}"
                 
-                # 獨立的 D2 / D3 欄位：抓取機場名稱與日期
                 loc2_str = f"**{r['d2d']} {AIRPORT_MAP.get(r['d2d'], '')}** - {r['d2'][5:].replace('-', '/')}"
                 loc3_str = f"**{r['d3o']} {AIRPORT_MAP.get(r['d3o'], '')}** - {r['d3'][5:].replace('-', '/')}"
                 
-                # 路線：反過來凸顯主行程
                 route_str = f"<span style='color:#888;'>【 {r['h1']}➔{r['d2o']} 】 {r['d2o']}➔</span>**{r['d2d']}** <span style='color:#888;'>&#124;</span> **{r['d3o']}**<span style='color:#888;'>➔{r['d3d']} 【 {r['d3d']}➔{r['h4']} 】</span>"
                 
                 md_table.append(f"| {price_str} | {diff_str} | {loc2_str} | {loc3_str} | {route_str} | {f1} | {f2} | {f3} | {f4} |")
                 
-        # 3. 渲染為原生 Markdown，享受 Streamlit 最順暢的表格 UI
         st.markdown("\n".join(md_table), unsafe_allow_html=True)
         
     with t2:
