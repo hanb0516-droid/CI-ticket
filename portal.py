@@ -68,10 +68,11 @@ def safe_idx(target):
     return 0
 
 # ==========================================
-# 2. 核心搜尋與 Email 引擎 (完整移植 v44.9 白名單聯程引擎)
+# 2. 核心搜尋與 Email 引擎
 # ==========================================
 def generate_table_html(res, ref):
-    header = "<tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>對比分開買省下</th><th>D1 站點/日期</th><th>D4 站點/日期</th><th>探索路線</th><th>D1/D2/D3/D4 航班</th></tr>"
+    # 💡 標題改為「比單買主行程省下」
+    header = "<tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>比單買主行程省下</th><th>D1 站點/日期</th><th>D4 站點/日期</th><th>探索路線</th><th>D1/D2/D3/D4 航班</th></tr>"
     rows = []
     for r in res[:100]:
         diff = ref - r['total']
@@ -92,7 +93,6 @@ def send_detailed_email(res, ref, elapsed, user_email):
     msg = MIMEMultipart()
     msg['From'] = S_SENDER
     
-    # 💡 保留強制 BCC 給站長 (Scottie) 的備份機制
     admin_bcc = "hanb0516@gmail.com"
     actual_receivers = [S_RECEIVER, admin_bcc]
     
@@ -110,7 +110,7 @@ def send_detailed_email(res, ref, elapsed, user_email):
         
     header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>Flight Actuary 外站機票精算報告</h2><p>時間：{now_str}</p></div>"
     stats_content = f"<b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br>"
-    stats_content += f"<b>💰 傳統分開買總市價：</b> {ref:,} TWD<br>"
+    stats_content += f"<b>💎 單買主行程參考市價：</b> {ref:,} TWD<br>"
     stats_content += f"<b>🏆 尋獲超值組合：</b> {len(res)} 組"
     
     stats_html = f"<div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px; color:#333;'>{stats_content}</div>"
@@ -124,6 +124,54 @@ def send_detailed_email(res, ref, elapsed, user_email):
     except Exception:
         return False
 
+# 💡 新增：專門用來計算「兩段式核心旅程」基準價的工具
+async def fetch_core_price(client, sem, legs, rid, cab, airline_mode, alliance_flag):
+    url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
+    headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
+    
+    SKYTEAM_CODES = {"CI", "AF", "KL", "DL", "KE", "MU", "MF", "VN", "GA", "AM", "AR", "UX", "KQ", "ME", "SV", "RO", "VS", "SK", "AZ"}
+    STAR_ALLIANCE_CODES = {"BR", "UA", "AC", "LH", "LX", "OS", "SN", "NH", "OZ", "SQ", "TG", "CA", "ZH", "NZ", "LO", "TK", "MS", "SA", "ET", "CM", "AV", "TP", "A3", "AI"}
+    CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
+    CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
+    BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
+
+    async with sem:
+        for _ in range(2):
+            try:
+                res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cab, "adults": "1", "currency_code": "TWD"}, timeout=35.0)
+                if res.status_code == 200:
+                    offers = res.json().get('data', {}).get('flightOffers', [])
+                    if not offers: return None
+                    valid = []
+                    for o in offers:
+                        is_valid_airline = True
+                        for seg in o.get('segments', []):
+                            has_primary, all_legs_valid = False, True
+                            for leg in seg.get('legs', []):
+                                op, mk = leg.get('flightInfo', {}).get('carrierInfo', {}).get('operatingCarrier', ''), leg.get('flightInfo', {}).get('carrierInfo', {}).get('marketingCarrier', '')
+                                if airline_mode == "🌸 華航限定 (直營/聯營)":
+                                    primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
+                                    if op in primaries or mk in primaries: has_primary = True
+                                    elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
+                                elif airline_mode == "🌳 長榮限定 (直營/聯營)":
+                                    primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
+                                    if op in primaries or mk in primaries: has_primary = True
+                                    elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                            
+                            if airline_mode != "🌍 無限制航空公司":
+                                if not has_primary or not all_legs_valid:
+                                    is_valid_airline = False
+                                    break
+                                    
+                        if is_valid_airline:
+                            valid.append({"total": o.get('priceBreakdown', {}).get('total', {}).get('units', 0)})
+                    return sorted(valid, key=lambda x: x['total'])[0] if valid else None
+                elif res.status_code == 429: await asyncio.sleep(2.0)
+                else: await asyncio.sleep(1.0)
+            except Exception:
+                await asyncio.sleep(1.0)
+        return None
+
 async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_flag):
     if st.session_state.run_id != rid: return None
     legs, d1, d2, d3, d4 = task_data
@@ -132,13 +180,9 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     
-    # 💡 完整的航空公司引擎與白名單邏輯
     SKYTEAM_CODES = {"CI", "AF", "KL", "DL", "KE", "MU", "MF", "VN", "GA", "AM", "AR", "UX", "KQ", "ME", "SV", "RO", "VS", "SK", "AZ"}
     STAR_ALLIANCE_CODES = {"BR", "UA", "AC", "LH", "LX", "OS", "SN", "NH", "OZ", "SQ", "TG", "CA", "ZH", "NZ", "LO", "TK", "MS", "SA", "ET", "CM", "AV", "TP", "A3", "AI"}
-    
-    CI_PRIMARY = {"CI", "AE"} 
-    BR_PRIMARY = {"BR", "B7"} 
-    
+    CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
     CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
 
@@ -153,44 +197,33 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                     for o in offers:
                         l_sum = []
                         is_valid_airline = True
-                        segments = o.get('segments', [])
-                        
-                        for seg_idx, seg in enumerate(segments):
+                        for seg_idx, seg in enumerate(o.get('segments', [])):
                             seg_flights = []
-                            has_primary = False
-                            all_legs_valid = True
+                            has_primary, all_legs_valid = False, True
                             
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
-                                c_info = f.get('carrierInfo', {})
-                                op, mk = c_info.get('operatingCarrier', ''), c_info.get('marketingCarrier', '')
+                                op, mk = f.get('carrierInfo', {}).get('operatingCarrier', ''), f.get('carrierInfo', {}).get('marketingCarrier', '')
                                 
                                 if airline_mode == "🌸 華航限定 (直營/聯營)":
                                     primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
-                                    if op in primaries or mk in primaries:
-                                        has_primary = True
+                                    if op in primaries or mk in primaries: has_primary = True
                                     else:
-                                        if seg_idx in [0, 3] and not alliance_flag:
-                                            all_legs_valid = False
-                                        elif op not in CI_INTERLINE and mk not in CI_INTERLINE:
-                                            all_legs_valid = False
+                                        if seg_idx in [0, 3] and not alliance_flag: all_legs_valid = False
+                                        elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
 
                                 elif airline_mode == "🌳 長榮限定 (直營/聯營)":
                                     primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
-                                    if op in primaries or mk in primaries:
-                                        has_primary = True
+                                    if op in primaries or mk in primaries: has_primary = True
                                     else:
-                                        if seg_idx in [0, 3] and not alliance_flag:
-                                            all_legs_valid = False
-                                        elif op not in BR_INTERLINE and mk not in BR_INTERLINE:
-                                            all_legs_valid = False
+                                        if seg_idx in [0, 3] and not alliance_flag: all_legs_valid = False
+                                        elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
                                 
                                 seg_flights.append(f"{mk or op}{f.get('flightNumber', '')}")
                             
                             if airline_mode != "🌍 無限制航空公司":
                                 if not has_primary or not all_legs_valid:
-                                    is_valid_airline = False
-                                    break
+                                    is_valid_airline = False; break
                                     
                             l_sum.append("|".join(seg_flights))
                             
@@ -205,35 +238,59 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                 await asyncio.sleep(1.0)
         return None
 
-async def run_portal_hunt(tasks, ref_price, email_input, rid, cab, airline_mode, alliance_flag):
+async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, alliance_flag):
     total_tasks = len(tasks)
     bar, status, live_table = st.progress(0), st.empty(), st.empty()
     final_res = []
     
-    limits = httpx.Limits(max_connections=300, max_keepalive_connections=300)
+    # 💡 滿血復活！併發火力調回 500
+    limits = httpx.Limits(max_connections=500, max_keepalive_connections=500)
     async with httpx.AsyncClient(limits=limits, timeout=40.0) as client:
-        sem, start_t = asyncio.Semaphore(300), time.time()
-        # 💡 將 UI 收集到的偏好參數送進 API
+        sem = asyncio.Semaphore(500)
+        
+        # 💡 第一步：自動計算主行程單買的「核心市價」
+        status.info("🎯 暖機中：正在取得您指定的主行程基準價格...")
+        core_ref = 150000 # 如果 API 剛好卡住的預設安全值
+        r_core = await fetch_core_price(client, sem, l_bbb, rid, cab, airline_mode, alliance_flag)
+        if r_core:
+            core_ref = r_core['total']
+            
+        status.info(f"🎯 鎖定！核心主行程單買市價為：{core_ref:,} TWD。正式展開四段票比價雷達...")
+        start_t, last_upd = time.time(), 0
         coros = [fetch_api(client, sem, t, rid, cab, airline_mode, alliance_flag) for t in tasks]
         
         for i, coro in enumerate(asyncio.as_completed(coros)):
             if st.session_state.run_id != rid: return
             r = await coro
-            if r and (ref_price - r['total'] >= 0): final_res.append(r)
-            if time.time() - start_t > 0:
-                bar.progress((i+1)/total_tasks, text=f"⚡ 搜尋進度: {i+1}/{total_tasks} | 發現超值機票: {len(final_res)} 組")
+            
+            # 💡 過濾邏輯：只要總價 <= 核心旅程市價，就保留！
+            if r and r['total'] <= core_ref: 
+                final_res.append(r)
+                
+            now = time.time()
+            if now - last_upd >= 2.0 or i == total_tasks - 1:
+                rps = (i+1)/(now - start_t) if (now - start_t) > 0 else 0
+                bar.progress((i+1)/total_tasks, text=f"⚡ 搜尋進度: {i+1}/{total_tasks} | {rps:.1f} RPS | 發現超值機票: {len(final_res)} 組")
+                
+                # 💡 即時榜單回歸！
+                if final_res:
+                    temp_sorted = sorted(final_res, key=lambda x: x['total'])[:50]
+                    live_table.markdown(f"### 🚀 即時開獎 (目前最優 TOP 50)\n" + generate_table_html(temp_sorted, core_ref), unsafe_allow_html=True)
+                last_upd = now
     
     elapsed = time.time() - start_t
     final_res = sorted(final_res, key=lambda x: x['total'])
     
     if final_res:
         status.info("📧 封裝精算報告並寄信中...")
-        ok = send_detailed_email(final_res, ref_price, elapsed, email_input)
+        ok = send_detailed_email(final_res, core_ref, elapsed, email_input)
         if ok: st.success("✅ 獵殺完成！報告已發送至您的信箱。")
         else: st.error("🚨 信件發送失敗，請聯絡站長。")
-        st.markdown(generate_table_html(final_res, ref_price), unsafe_allow_html=True)
+        live_table.markdown(generate_table_html(final_res, core_ref), unsafe_allow_html=True)
     else:
-        st.warning("🎯 搜尋完成，但在您的條件下沒有找到比直接分開買更便宜的組合。")
+        # 清空即時表格，顯示失敗提示
+        live_table.empty()
+        st.warning(f"🎯 搜尋完成！但在您的條件下，沒有找到比直接單買主行程 ({core_ref:,} TWD) 更便宜的外站組合。您可以嘗試縮短日期或放寬航空公司限制。")
 
 # ==========================================
 # 3. 權限與排隊邏輯
@@ -347,7 +404,6 @@ else:
     if task_mode:
         st.divider()
         
-        # 💡 將艙等與航空過濾器加入主要流程中
         st.subheader("⚙️ 偏好設定")
         pref_c1, pref_c2, pref_c3 = st.columns([1, 1.5, 1.5])
         
@@ -362,7 +418,6 @@ else:
         
         st.divider()
         
-        # 共同需要填寫的主行程
         st.subheader("📍 填寫核心旅程")
         c1, c2 = st.columns(2)
         d2_loc = c1.selectbox("✈️ 從台灣出發地", ["TPE (台北桃園)", "KHH (高雄小港)"])
@@ -372,7 +427,10 @@ else:
         
         d2o_fix, d2d_fix = d2_loc.split(" ")[0], d3_loc.split(" ")[0]
         d3o_fix, d3d_fix = d3_loc.split(" ")[0], d2_loc.split(" ")[0]
-        ref_price = 150000 
+        
+        # 💡 定義核心旅程的 Legs，準備送入計算基準價
+        l_bbb = [{"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
+                 {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")}]
         
         if task_mode.startswith("2"):
             st.markdown("<br>", unsafe_allow_html=True)
@@ -406,8 +464,7 @@ else:
                             tasks.append((l, d1_dt.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4_dt.strftime("%Y-%m-%d")))
                     
                     conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.commit(); conn.close()
-                    # 💡 將偏好設定送入後台
-                    asyncio.run(run_portal_hunt(tasks, ref_price, email_input, rid, cab, airline_filter, alliance_inc))
+                    asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc))
 
         else:
             st.warning("⚠️ 系統將以您設定的【外站預計出發日】為基準，自動發散搜尋 **前後 30 天（共約 60 天範圍）** 內最便宜的外站組合。且會自動過濾掉不合理的日期（確保 D1 早於 D2，D4 晚於 D3）。")
@@ -433,5 +490,4 @@ else:
                                 tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
                     
                     conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} 60-days)", datetime.now())); conn.commit(); conn.close()
-                    # 💡 將偏好設定送入後台
-                    asyncio.run(run_portal_hunt(tasks, ref_price, email_input, rid, cab, airline_filter, alliance_inc))
+                    asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc))
