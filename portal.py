@@ -451,20 +451,17 @@ else:
             st.divider()
             st.subheader("Step 3: 選擇外站掃描區域與站點")
             
-            # 💡 1. 區域過濾
             selected_regions = st.multiselect(
                 "🌍 區域快速過濾 (選擇後將自動展開下方機場名單)",
                 list(ALL_HUBS.keys()),
                 default=["東北亞", "東南亞/南亞"]
             )
             
-            # 💡 2. 根據區域動態產生機場名單
             if selected_regions:
                 flt_opts = [f"{c} ({n})" for r in selected_regions for c, n in ALL_HUBS[r].items()]
             else:
                 flt_opts = []
                 
-            # 💡 3. 機場詳細選擇框 (讓使用者可以刪減不想去的機場)
             dynamic_key = f"opt1_locs_{hash(tuple(selected_regions))}"
             target_locs = st.multiselect(
                 "📍 實際將掃描的機場站點 (可自由刪除不想去的城市)",
@@ -487,7 +484,6 @@ else:
                 else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
                     
-                    # 💡 擷取使用者實際保留的機場代碼
                     target_codes = [loc.split(" ")[0] for loc in target_locs]
                         
                     tasks = []
@@ -507,36 +503,36 @@ else:
             st.divider()
             st.subheader("Step 3: 填寫外站旅程")
             cc1, cc2 = st.columns(2)
+            # 💡 移除日期輸入框，只保留地點選擇
             d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
-            d1_date_input = cc1.date_input("📅 D1 預計出發日", value=d2_date - timedelta(days=1))
-            
             d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
-            d4_date_input = cc2.date_input("📅 D4 預計出發日", value=d3_date + timedelta(days=1))
 
-            st.warning("⚠️ 系統將以您設定的【外站預計出發日】為基準，自動發散搜尋 **前後 30 天（共約 60 天範圍）** 內的外站組合。且會自動過濾掉不合理的日期（確保 D1 早於 D2，D4 晚於 D3）。")
+            # 💡 更新提示文案，強調 40,000 筆資料的大數據掃描
+            st.warning("⚠️ 系統將以您設定的核心日期為基準，自動掃描 **D2 出發前 200 天**、與 **D3 回程後 200 天**，共計約 40,000 種組合的大數據運算！")
             
             st.divider()
             st.subheader("Step 4: 確認與執行")
             email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", value=default_email, placeholder="例如: yourname@gmail.com")
             
-            if st.button("🚀 展開 60 天範圍精算並寄信", type="primary"):
+            if st.button("🚀 展開 40,000 筆深度精算並寄信", type="primary"):
                 if not email_input: st.error("🚨 請輸入 Email！")
                 else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
                     h1_fix, h4_fix = d1_loc.split(" ")[0], d4_loc.split(" ")[0]
                     
-                    d1_dates = [d1_date_input + timedelta(days=i) for i in range(-30, 31)]
-                    d4_dates = [d4_date_input + timedelta(days=i) for i in range(-30, 31)]
+                    # 💡 D1 從 (D2-200天) 掃到 (D2-1天)
+                    d1_dates = [d2_date - timedelta(days=i) for i in range(200, 0, -1)]
+                    # 💡 D4 從 (D3+1天) 掃到 (D3+200天)
+                    d4_dates = [d3_date + timedelta(days=i) for i in range(1, 201)]
                     
                     tasks = []
                     for d1 in d1_dates:
                         for d4 in d4_dates:
-                            if d1 <= d2_date and d3_date <= d4:
-                                l = [{"fromId": f"{h1_fix}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
-                                     {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
-                                     {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
-                                     {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
-                                tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
+                            l = [{"fromId": f"{h1_fix}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
+                                 {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
+                                 {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
+                                 {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
+                            tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
                     
-                    conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} 60-days)", datetime.now())); conn.commit(); conn.close()
+                    conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} 40k-scan)", datetime.now())); conn.commit(); conn.close()
                     asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price))
