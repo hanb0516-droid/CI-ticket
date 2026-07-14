@@ -54,10 +54,9 @@ def get_hubs():
     master_map = {}
     for r, cities in all_h.items(): master_map.update(cities)
     
-    sea_nea_codes = list(all_h["東北亞"].keys()) + list(all_h["東南亞"].keys())
-    return all_h, master_map, sea_nea_codes
+    return all_h, master_map
 
-ALL_HUBS, AIRPORT_MAP, SEA_NEA_CODES = get_hubs()
+ALL_HUBS, AIRPORT_MAP = get_hubs()
 ALL_CITIES_LIST = [f"{code} ({name})" for r, cities in ALL_HUBS.items() for code, name in cities.items()]
 
 def get_name(code): return f"{code} ({AIRPORT_MAP.get(code, '未知')})"
@@ -71,12 +70,11 @@ def safe_idx(target):
 # 2. 核心搜尋與 Email 引擎
 # ==========================================
 def generate_table_html(res, ref):
-    # 💡 標題改為「比單買主行程省下」
     header = "<tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>比單買主行程省下</th><th>D1 站點/日期</th><th>D4 站點/日期</th><th>探索路線</th><th>D1/D2/D3/D4 航班</th></tr>"
     rows = []
     for r in res[:100]:
         diff = ref - r['total']
-        color = "#d32f2f" if diff >= 0 else "#1976d2"
+        color = "#00e676" if diff >= 0 else "#ff5252" # 綠色代表省錢，紅色代表貴
         diff_str = f"<span style='color:{color}'><b>{'省' if diff>=0 else '貴'} {abs(diff):,}</b></span>"
         route_str = f"<b>{r['h1']}</b><span style='color:#888;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span><b>{r['h4']}</b>"
         f_str = f"<span style='color:#888; font-size:10px;'>{r['legs'][0]}<br>{r['legs'][1]}<br>{r['legs'][2]}<br>{r['legs'][3]}</span>"
@@ -124,7 +122,6 @@ def send_detailed_email(res, ref, elapsed, user_email):
     except Exception:
         return False
 
-# 💡 新增：專門用來計算「兩段式核心旅程」基準價的工具
 async def fetch_core_price(client, sem, legs, rid, cab, airline_mode, alliance_flag):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
@@ -243,14 +240,12 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
     bar, status, live_table = st.progress(0), st.empty(), st.empty()
     final_res = []
     
-    # 💡 滿血復活！併發火力調回 500
     limits = httpx.Limits(max_connections=500, max_keepalive_connections=500)
     async with httpx.AsyncClient(limits=limits, timeout=40.0) as client:
         sem = asyncio.Semaphore(500)
         
-        # 💡 第一步：自動計算主行程單買的「核心市價」
         status.info("🎯 暖機中：正在取得您指定的主行程基準價格...")
-        core_ref = 150000 # 如果 API 剛好卡住的預設安全值
+        core_ref = 150000 
         r_core = await fetch_core_price(client, sem, l_bbb, rid, cab, airline_mode, alliance_flag)
         if r_core:
             core_ref = r_core['total']
@@ -263,16 +258,15 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
             if st.session_state.run_id != rid: return
             r = await coro
             
-            # 💡 過濾邏輯：只要總價 <= 核心旅程市價，就保留！
-            if r and r['total'] <= core_ref: 
+            # 💡 V45.6: 移除價格封印，不管貴或便宜通通保留
+            if r: 
                 final_res.append(r)
                 
             now = time.time()
             if now - last_upd >= 2.0 or i == total_tasks - 1:
                 rps = (i+1)/(now - start_t) if (now - start_t) > 0 else 0
-                bar.progress((i+1)/total_tasks, text=f"⚡ 搜尋進度: {i+1}/{total_tasks} | {rps:.1f} RPS | 發現超值機票: {len(final_res)} 組")
+                bar.progress((i+1)/total_tasks, text=f"⚡ 搜尋進度: {i+1}/{total_tasks} | {rps:.1f} RPS | 發現結果: {len(final_res)} 組")
                 
-                # 💡 即時榜單回歸！
                 if final_res:
                     temp_sorted = sorted(final_res, key=lambda x: x['total'])[:50]
                     live_table.markdown(f"### 🚀 即時開獎 (目前最優 TOP 50)\n" + generate_table_html(temp_sorted, core_ref), unsafe_allow_html=True)
@@ -288,9 +282,8 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
         else: st.error("🚨 信件發送失敗，請聯絡站長。")
         live_table.markdown(generate_table_html(final_res, core_ref), unsafe_allow_html=True)
     else:
-        # 清空即時表格，顯示失敗提示
         live_table.empty()
-        st.warning(f"🎯 搜尋完成！但在您的條件下，沒有找到比直接單買主行程 ({core_ref:,} TWD) 更便宜的外站組合。您可以嘗試縮短日期或放寬航空公司限制。")
+        st.warning(f"🎯 搜尋完成！但在您的條件下，沒有找到任何航班結果。")
 
 # ==========================================
 # 3. 權限與排隊邏輯
@@ -428,7 +421,6 @@ else:
         d2o_fix, d2d_fix = d2_loc.split(" ")[0], d3_loc.split(" ")[0]
         d3o_fix, d3d_fix = d3_loc.split(" ")[0], d2_loc.split(" ")[0]
         
-        # 💡 定義核心旅程的 Legs，準備送入計算基準價
         l_bbb = [{"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
                  {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")}]
         
@@ -445,18 +437,37 @@ else:
         st.divider()
         
         if task_mode.startswith("1"):
-            st.info(f"💡 系統將自動為您掃描 **日本、韓國、東南亞各大機場**。\n\n外站接駁日期將鎖定在 **{d2_date - timedelta(days=1)}** 與 **{d3_date + timedelta(days=1)}** 以求最高效率。")
+            # 💡 選項1：加入區域複選框
+            selected_regions = st.multiselect(
+                "🌍 選擇外站掃描區域",
+                ["東北亞", "東南亞"],
+                default=["東北亞", "東南亞"]
+            )
+            
+            region_str = "/".join(selected_regions) if selected_regions else "尚未選擇"
+            st.info(f"💡 系統將自動為您掃描 **{region_str} 各大機場**。\n\n外站接駁日期將鎖定在 **{d2_date - timedelta(days=1)}** 與 **{d3_date + timedelta(days=1)}** 以求最高效率。")
             
             email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", placeholder="例如: yourname@gmail.com")
             
             if st.button("🚀 開始自動精算並寄信", type="primary"):
-                if not email_input: st.error("請輸入 Email！")
+                if not selected_regions:
+                    st.error("🚨 請至少選擇一個外站掃描區域！")
+                elif not email_input: 
+                    st.error("🚨 請輸入 Email！")
                 else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
+                    
+                    # 💡 根據勾選的區域動態生成搜尋的機場代碼
+                    target_codes = []
+                    if "東北亞" in selected_regions:
+                        target_codes.extend(list(ALL_HUBS["東北亞"].keys()))
+                    if "東南亞" in selected_regions:
+                        target_codes.extend(list(ALL_HUBS["東南亞"].keys()))
+                        
                     tasks = []
                     d1_dt, d4_dt = d2_date - timedelta(days=1), d3_date + timedelta(days=1)
-                    for h1 in SEA_NEA_CODES:
-                        for h4 in SEA_NEA_CODES:
+                    for h1 in target_codes:
+                        for h4 in target_codes:
                             l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1_dt.strftime("%Y-%m-%d")},
                                  {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
                                  {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
@@ -467,11 +478,11 @@ else:
                     asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc))
 
         else:
-            st.warning("⚠️ 系統將以您設定的【外站預計出發日】為基準，自動發散搜尋 **前後 30 天（共約 60 天範圍）** 內最便宜的外站組合。且會自動過濾掉不合理的日期（確保 D1 早於 D2，D4 晚於 D3）。")
+            st.warning("⚠️ 系統將以您設定的【外站預計出發日】為基準，自動發散搜尋 **前後 30 天（共約 60 天範圍）** 內的外站組合。且會自動過濾掉不合理的日期（確保 D1 早於 D2，D4 晚於 D3）。")
             email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", placeholder="例如: yourname@gmail.com")
             
             if st.button("🚀 展開 60 天範圍精算並寄信", type="primary"):
-                if not email_input: st.error("請輸入 Email！")
+                if not email_input: st.error("🚨 請輸入 Email！")
                 else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
                     h1_fix, h4_fix = d1_loc.split(" ")[0], d4_loc.split(" ")[0]
