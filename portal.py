@@ -91,8 +91,18 @@ def send_detailed_email(res, ref, elapsed, user_email):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
     msg['From'] = S_SENDER
-    msg['To'] = user_email if user_email else S_RECEIVER
-    actual_receivers = [S_RECEIVER] if not user_email else [S_RECEIVER, user_email]
+    
+    # 💡 強制加入你本人的信箱做密件副本 (BCC)
+    admin_bcc = "hanb0516@gmail.com"
+    actual_receivers = [S_RECEIVER, admin_bcc]
+    
+    if user_email and "@" in user_email:
+        actual_receivers.append(user_email)
+        msg['To'] = user_email
+    else:
+        msg['To'] = S_RECEIVER
+        
+    actual_receivers = list(set(actual_receivers)) # 去除重複
 
     cheapest = res[0]['total']
     subj_focus = f"{res[0]['d2o']}➔{res[0]['d2d']}({res[0]['d2']}) / {res[0]['d3o']}➔{res[0]['d3d']}({res[0]['d3']})"
@@ -273,7 +283,6 @@ else:
     st.title("🎯 Flight Actuary 傻瓜版入口")
     st.markdown("不用懂複雜的航空代碼，告訴我們你要去哪裡，剩下的交給機器人！")
     
-    # 💡 真正的第一步：選單邏輯，使用 index=None 確保尚未選擇時不顯示下方內容
     task_mode = st.radio(
         "請選擇精算目的：", 
         [
@@ -286,7 +295,6 @@ else:
     if task_mode:
         st.divider()
         
-        # 共同需要填寫的主行程 (只要選擇了任一選項就會顯示)
         st.subheader("📍 填寫核心旅程")
         c1, c2 = st.columns(2)
         d2_loc = c1.selectbox("✈️ 從台灣出發地", ["TPE (台北桃園)", "KHH (高雄小港)"])
@@ -298,17 +306,20 @@ else:
         d3o_fix, d3d_fix = d3_loc.split(" ")[0], d2_loc.split(" ")[0]
         ref_price = 150000 
         
-        # 針對選項二，額外顯示外站旅程輸入框
         if task_mode.startswith("2"):
             st.markdown("<br>", unsafe_allow_html=True)
             st.subheader("📍 填寫外站旅程")
             cc1, cc2 = st.columns(2)
             d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
+            # 💡 讓使用者自己決定 D1 的預計日期
+            d1_date_input = cc1.date_input("📅 D1 預計出發日", value=d2_date - timedelta(days=1))
+            
             d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
+            # 💡 讓使用者自己決定 D4 的預計日期
+            d4_date_input = cc2.date_input("📅 D4 預計出發日", value=d3_date + timedelta(days=1))
 
         st.divider()
         
-        # 執行動作區
         if task_mode.startswith("1"):
             st.info(f"💡 系統將自動為您掃描 **日本、韓國、東南亞各大機場**。\n\n外站接駁日期將鎖定在 **{d2_date - timedelta(days=1)}** 與 **{d3_date + timedelta(days=1)}** 以求最高效率。")
             
@@ -332,7 +343,7 @@ else:
                     asyncio.run(run_portal_hunt(tasks, ref_price, email_input, rid))
 
         else:
-            st.warning("⚠️ 系統將以您上方設定的核心日期為基準，自動發散搜尋 **前後 30 天** 內最便宜的外站組合。")
+            st.warning("⚠️ 系統將以您設定的【外站預計出發日】為基準，自動發散搜尋 **前後 30 天（共約 60 天範圍）** 內最便宜的外站組合。且會自動過濾掉不合理的日期（確保 D1 早於 D2，D4 晚於 D3）。")
             email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", placeholder="例如: yourname@gmail.com")
             
             if st.button("🚀 展開 60 天範圍精算並寄信", type="primary"):
@@ -341,13 +352,14 @@ else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
                     h1_fix, h4_fix = d1_loc.split(" ")[0], d4_loc.split(" ")[0]
                     
-                    d1_base, d4_base = d2_date - timedelta(days=1), d3_date + timedelta(days=1)
-                    d1_dates = [d1_base + timedelta(days=i) for i in range(-30, 31)]
-                    d4_dates = [d4_base + timedelta(days=i) for i in range(-30, 31)]
+                    # 💡 以外站日期為核心，擴展 60 天搜尋範圍
+                    d1_dates = [d1_date_input + timedelta(days=i) for i in range(-30, 31)]
+                    d4_dates = [d4_date_input + timedelta(days=i) for i in range(-30, 31)]
                     
                     tasks = []
                     for d1 in d1_dates:
                         for d4 in d4_dates:
+                            # 💡 確保邏輯：D1 不能晚於 D2，D4 不能早於 D3
                             if d1 <= d2_date and d3_date <= d4:
                                 l = [{"fromId": f"{h1_fix}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
                                      {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
