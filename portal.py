@@ -54,7 +54,6 @@ def get_hubs():
     master_map = {}
     for r, cities in all_h.items(): master_map.update(cities)
     
-    # 幫選項1打包好東南亞與東北亞的所有機場代碼
     sea_nea_codes = list(all_h["東北亞"].keys()) + list(all_h["東南亞"].keys())
     return all_h, master_map, sea_nea_codes
 
@@ -63,8 +62,13 @@ ALL_CITIES_LIST = [f"{code} ({name})" for r, cities in ALL_HUBS.items() for code
 
 def get_name(code): return f"{code} ({AIRPORT_MAP.get(code, '未知')})"
 
+def safe_idx(target):
+    for i, s in enumerate(ALL_CITIES_LIST):
+        if s.startswith(target): return i
+    return 0
+
 # ==========================================
-# 2. 核心搜尋與 Email 引擎 (移植自 v45)
+# 2. 核心搜尋與 Email 引擎
 # ==========================================
 def generate_table_html(res, ref):
     header = "<tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>對比分開買省下</th><th>D1 站點/日期</th><th>D4 站點/日期</th><th>探索路線</th><th>D1/D2/D3/D4 航班</th></tr>"
@@ -173,8 +177,8 @@ async def run_portal_hunt(tasks, ref_price, email_input, rid):
 # 3. 權限與排隊邏輯
 # ==========================================
 def login_screen():
-    st.markdown("<h1 style='text-align:center;'>✈️ Flight Actuary 外站票神器</h1>", unsafe_allow_html=True)
-    st.markdown("<h4 style='text-align:center; color:#888;'>智能精算・幫你省下十萬元機票錢</h4><br>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center;'>✈️ Flight Actuary 傻瓜版入口</h1>", unsafe_allow_html=True)
+    st.markdown("<h4 style='text-align:center; color:#888;'>不用懂複雜的航空代碼，告訴我們你要去哪裡，剩下的交給機器人！</h4><br>", unsafe_allow_html=True)
     
     c1, c2, c3 = st.columns([1,2,1])
     with c2:
@@ -209,7 +213,7 @@ def check_queue():
     
     if running_user:
         run_name, start_t = running_user
-        if time.time() - start_t > 600 and waiting_count > 0: # 10分鐘踢人
+        if time.time() - start_t > 600 and waiting_count > 0: 
             c.execute("DELETE FROM queue WHERE username=?", (run_name,))
             conn.commit()
             running_user = None
@@ -269,77 +273,87 @@ else:
     st.title("🎯 Flight Actuary 傻瓜版入口")
     st.markdown("不用懂複雜的航空代碼，告訴我們你要去哪裡，剩下的交給機器人！")
     
-    task_mode = st.radio("請選擇精算目的：", [
-        "1️⃣ 【最省腦力】只輸入歐洲/主行程，由系統自動找出最便宜的亞洲外站",
-        "2️⃣ 【指定外站】我已經決定好要去哪個外站玩了，請幫我找便宜的日期組合"
-    ])
-    st.divider()
+    # 💡 真正的第一步：選單邏輯，使用 index=None 確保尚未選擇時不顯示下方內容
+    task_mode = st.radio(
+        "請選擇精算目的：", 
+        [
+            "1. 已確定核心旅程, 搜尋出最便宜外站票的搭配策略",
+            "2. 已確定核心旅程, 已確定外站旅程, 搜尋出最便宜的外站票配合時間"
+        ],
+        index=None
+    )
     
-    st.subheader("📍 第一步：填寫您的主要旅程 (歐洲/長程線)")
-    c1, c2 = st.columns(2)
-    d2_loc = c1.selectbox("✈️ 從台灣出發地", ["TPE (台北桃園)", "KHH (高雄小港)"])
-    d2_date = c1.date_input("📅 出發日期", value=date(2027, 2, 10))
-    d3_loc = c2.selectbox("✈️ 主要目的地", ["FRA (法蘭克福)", "CPH (哥本哈根)", "PRG (布拉格)", "AMS (阿姆斯特丹)", "LHR (倫敦)", "CDG (巴黎)"])
-    d3_date = c2.date_input("📅 回程日期", value=date(2027, 2, 25))
-    
-    # 共同基礎設定
-    d2o_fix, d2d_fix = d2_loc.split(" ")[0], d3_loc.split(" ")[0]
-    d3o_fix, d3d_fix = d3_loc.split(" ")[0], d2_loc.split(" ")[0]
-    ref_price = 150000  # 簡易版預設一個高的總市價基準，保證都能印出來
-    
-    if task_mode.startswith("1️⃣"):
-        st.markdown("<div style='background:#f0f2f6; padding:15px; border-radius:8px;'>"
-                    "<b>💡 系統機制：</b> 將自動為您掃描 <b>日本、韓國、東南亞各大機場</b>。<br>"
-                    f"外站接駁日期將鎖定在 <b>{d2_date - timedelta(days=1)}</b> 與 <b>{d3_date + timedelta(days=1)}</b> 以求最高效率。"
-                    "</div><br>", unsafe_allow_html=True)
+    if task_mode:
+        st.divider()
         
-        email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", placeholder="例如: yourname@gmail.com")
+        # 共同需要填寫的主行程 (只要選擇了任一選項就會顯示)
+        st.subheader("📍 填寫核心旅程")
+        c1, c2 = st.columns(2)
+        d2_loc = c1.selectbox("✈️ 從台灣出發地", ["TPE (台北桃園)", "KHH (高雄小港)"])
+        d2_date = c1.date_input("📅 出發日期", value=date(2027, 2, 10))
+        d3_loc = c2.selectbox("✈️ 主要目的地", ["FRA (法蘭克福)", "CPH (哥本哈根)", "PRG (布拉格)", "AMS (阿姆斯特丹)", "LHR (倫敦)", "CDG (巴黎)"])
+        d3_date = c2.date_input("📅 回程日期", value=date(2027, 2, 25))
         
-        if st.button("🚀 開始全亞洲掃描並寄信", type="primary"):
-            if not email_input: st.error("請輸入 Email！")
-            else:
-                rid = str(uuid.uuid4()); st.session_state.run_id = rid
-                tasks = []
-                d1_dt, d4_dt = d2_date - timedelta(days=1), d3_date + timedelta(days=1)
-                for h1 in SEA_NEA_CODES:
-                    for h4 in SEA_NEA_CODES:
-                        l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1_dt.strftime("%Y-%m-%d")},
-                             {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
-                             {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
-                             {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4_dt.strftime("%Y-%m-%d")}]
-                        tasks.append((l, d1_dt.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4_dt.strftime("%Y-%m-%d")))
-                
-                conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.commit(); conn.close()
-                asyncio.run(run_portal_hunt(tasks, ref_price, email_input, rid))
+        d2o_fix, d2d_fix = d2_loc.split(" ")[0], d3_loc.split(" ")[0]
+        d3o_fix, d3d_fix = d3_loc.split(" ")[0], d2_loc.split(" ")[0]
+        ref_price = 150000 
+        
+        # 針對選項二，額外顯示外站旅程輸入框
+        if task_mode.startswith("2"):
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.subheader("📍 填寫外站旅程")
+            cc1, cc2 = st.columns(2)
+            d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
+            d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
 
-    else:
-        st.subheader("🎯 第二步：設定您想去的外站")
-        cc1, cc2 = st.columns(2)
-        d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
-        d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
+        st.divider()
         
-        st.warning("⚠️ 系統將以您上方選擇的日期為基準，自動為您發散搜尋 **前後 30 天** 內最便宜的票價組合。")
-        email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", placeholder="例如: yourname@gmail.com")
-        
-        if st.button("🚀 展開 60 天範圍精算並寄信", type="primary"):
-            if not email_input: st.error("請輸入 Email！")
-            else:
-                rid = str(uuid.uuid4()); st.session_state.run_id = rid
-                h1_fix, h4_fix = d1_loc.split(" ")[0], d4_loc.split(" ")[0]
-                
-                d1_base, d4_base = d2_date - timedelta(days=1), d3_date + timedelta(days=1)
-                d1_dates = [d1_base + timedelta(days=i) for i in range(-30, 31)]
-                d4_dates = [d4_base + timedelta(days=i) for i in range(-30, 31)]
-                
-                tasks = []
-                for d1 in d1_dates:
-                    for d4 in d4_dates:
-                        if d1 <= d2_date and d3_date <= d4:
-                            l = [{"fromId": f"{h1_fix}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
+        # 執行動作區
+        if task_mode.startswith("1"):
+            st.info(f"💡 系統將自動為您掃描 **日本、韓國、東南亞各大機場**。\n\n外站接駁日期將鎖定在 **{d2_date - timedelta(days=1)}** 與 **{d3_date + timedelta(days=1)}** 以求最高效率。")
+            
+            email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", placeholder="例如: yourname@gmail.com")
+            
+            if st.button("🚀 開始自動精算並寄信", type="primary"):
+                if not email_input: st.error("請輸入 Email！")
+                else:
+                    rid = str(uuid.uuid4()); st.session_state.run_id = rid
+                    tasks = []
+                    d1_dt, d4_dt = d2_date - timedelta(days=1), d3_date + timedelta(days=1)
+                    for h1 in SEA_NEA_CODES:
+                        for h4 in SEA_NEA_CODES:
+                            l = [{"fromId": f"{h1}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1_dt.strftime("%Y-%m-%d")},
                                  {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
                                  {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
-                                 {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
-                            tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
-                
-                conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} 60-days)", datetime.now())); conn.commit(); conn.close()
-                asyncio.run(run_portal_hunt(tasks, ref_price, email_input, rid))
+                                 {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4_dt.strftime("%Y-%m-%d")}]
+                            tasks.append((l, d1_dt.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4_dt.strftime("%Y-%m-%d")))
+                    
+                    conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.commit(); conn.close()
+                    asyncio.run(run_portal_hunt(tasks, ref_price, email_input, rid))
+
+        else:
+            st.warning("⚠️ 系統將以您上方設定的核心日期為基準，自動發散搜尋 **前後 30 天** 內最便宜的外站組合。")
+            email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", placeholder="例如: yourname@gmail.com")
+            
+            if st.button("🚀 展開 60 天範圍精算並寄信", type="primary"):
+                if not email_input: st.error("請輸入 Email！")
+                else:
+                    rid = str(uuid.uuid4()); st.session_state.run_id = rid
+                    h1_fix, h4_fix = d1_loc.split(" ")[0], d4_loc.split(" ")[0]
+                    
+                    d1_base, d4_base = d2_date - timedelta(days=1), d3_date + timedelta(days=1)
+                    d1_dates = [d1_base + timedelta(days=i) for i in range(-30, 31)]
+                    d4_dates = [d4_base + timedelta(days=i) for i in range(-30, 31)]
+                    
+                    tasks = []
+                    for d1 in d1_dates:
+                        for d4 in d4_dates:
+                            if d1 <= d2_date and d3_date <= d4:
+                                l = [{"fromId": f"{h1_fix}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
+                                     {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
+                                     {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
+                                     {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
+                                tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
+                    
+                    conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} 60-days)", datetime.now())); conn.commit(); conn.close()
+                    asyncio.run(run_portal_hunt(tasks, ref_price, email_input, rid))
