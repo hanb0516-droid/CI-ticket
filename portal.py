@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | 傻瓜式外站機票神器", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
@@ -74,7 +74,7 @@ def generate_table_html(res, ref):
     rows = []
     for r in res[:100]:
         diff = ref - r['total']
-        color = "#00e676" if diff >= 0 else "#ff5252" # 綠色代表省錢，紅色代表貴
+        color = "#00e676" if diff >= 0 else "#ff5252"
         diff_str = f"<span style='color:{color}'><b>{'省' if diff>=0 else '貴'} {abs(diff):,}</b></span>"
         route_str = f"<b>{r['h1']}</b><span style='color:#888;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span><b>{r['h4']}</b>"
         f_str = f"<span style='color:#888; font-size:10px;'>{r['legs'][0]}<br>{r['legs'][1]}<br>{r['legs'][2]}<br>{r['legs'][3]}</span>"
@@ -109,7 +109,7 @@ def send_detailed_email(res, ref, elapsed, user_email):
     header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>Flight Actuary 外站機票精算報告</h2><p>時間：{now_str}</p></div>"
     stats_content = f"<b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br>"
     stats_content += f"<b>💎 單買主行程參考市價：</b> {ref:,} TWD<br>"
-    stats_content += f"<b>🏆 尋獲超值組合：</b> {len(res)} 組"
+    stats_content += f"<b>🏆 尋獲結果：</b> {len(res)} 組"
     
     stats_html = f"<div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px; color:#333;'>{stats_content}</div>"
     body = f"{header}{stats_html}<h3>📋 票價排行榜 (Top 100)</h3>{generate_table_html(res, ref)}"
@@ -258,7 +258,6 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
             if st.session_state.run_id != rid: return
             r = await coro
             
-            # 💡 V45.6: 移除價格封印，不管貴或便宜通通保留
             if r: 
                 final_res.append(r)
                 
@@ -283,13 +282,13 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
         live_table.markdown(generate_table_html(final_res, core_ref), unsafe_allow_html=True)
     else:
         live_table.empty()
-        st.warning(f"🎯 搜尋完成！但在您的條件下，沒有找到任何航班結果。")
+        st.warning(f"🎯 搜尋完成！但在您的條件下，沒有找到任何符合的航班結果。")
 
 # ==========================================
 # 3. 權限與排隊邏輯
 # ==========================================
 def login_screen():
-    st.markdown("<h1 style='text-align:center;'>✈️ Flight Actuary 傻瓜版入口</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center;'>✈️ Flight Actuary 外站機票精算系統</h1>", unsafe_allow_html=True)
     st.markdown("<h4 style='text-align:center; color:#888;'>不用懂複雜的航空代碼，告訴我們你要去哪裡，剩下的交給機器人！</h4><br>", unsafe_allow_html=True)
     
     c1, c2, c3 = st.columns([1,2,1])
@@ -382,36 +381,41 @@ else:
         st.session_state.run_id = None
         st.rerun()
 
-    st.title("🎯 Flight Actuary 傻瓜版入口")
+    st.title("🎯 Flight Actuary 外站機票精算系統")
     st.markdown("不用懂複雜的航空代碼，告訴我們你要去哪裡，剩下的交給機器人！")
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    task_mode = st.radio(
-        "請選擇精算目的：", 
-        [
-            "1. 已確定核心旅程, 搜尋出最便宜外站票的搭配策略",
-            "2. 已確定核心旅程, 已確定外站旅程, 搜尋出最便宜的外站票配合時間"
-        ],
-        index=None
-    )
+    # 💡 頂部切分為黃金比例：左側(Step1) 60%，右側(偏好設定) 40%
+    col_left, col_right = st.columns([1.5, 1])
     
+    with col_left:
+        st.subheader("Step 1: 請選擇精算目的")
+        task_mode = st.radio(
+            "請選擇精算目的", 
+            [
+                "1. 已確定核心旅程, 搜尋出最便宜外站票的搭配策略",
+                "2. 已確定核心旅程, 已確定外站旅程, 搜尋出最便宜的外站票配合時間"
+            ],
+            index=None,
+            label_visibility="collapsed"
+        )
+        
+    with col_right:
+        st.subheader("⚙️ 偏好設定")
+        cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
+        airline_filter = st.selectbox("✈️ 航空公司過濾", ["🌸 華航限定 (直營/聯營)", "🌳 長榮限定 (直營/聯營)", "🌍 無限制航空公司"], index=0)
+        
+        alliance_inc = False
+        if "華航" in airline_filter:
+            alliance_inc = st.checkbox("🤝 包含天合聯盟成員 (SkyTeam)", value=False)
+        elif "長榮" in airline_filter:
+            alliance_inc = st.checkbox("🤝 包含星空聯盟成員 (Star Alliance)", value=False)
+    
+    # 只有在選擇了 Step 1 之後，才顯示後續的內容
     if task_mode:
         st.divider()
         
-        st.subheader("⚙️ 偏好設定")
-        pref_c1, pref_c2, pref_c3 = st.columns([1, 1.5, 1.5])
-        
-        cab = pref_c1.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
-        airline_filter = pref_c2.radio("✈️ 航空公司過濾", ["🌸 華航限定 (直營/聯營)", "🌳 長榮限定 (直營/聯營)", "🌍 無限制航空公司"], index=0)
-        
-        alliance_inc = False
-        if airline_filter == "🌸 華航限定 (直營/聯營)":
-            alliance_inc = pref_c3.checkbox("🤝 包含天合聯盟成員 (SkyTeam)", value=False)
-        elif airline_filter == "🌳 長榮限定 (直營/聯營)":
-            alliance_inc = pref_c3.checkbox("🤝 包含星空聯盟成員 (Star Alliance)", value=False)
-        
-        st.divider()
-        
-        st.subheader("📍 填寫核心旅程")
+        st.subheader("Step 2: 填寫核心旅程")
         c1, c2 = st.columns(2)
         d2_loc = c1.selectbox("✈️ 從台灣出發地", ["TPE (台北桃園)", "KHH (高雄小港)"])
         d2_date = c1.date_input("📅 出發日期", value=date(2027, 2, 10))
@@ -424,30 +428,24 @@ else:
         l_bbb = [{"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
                  {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")}]
         
-        if task_mode.startswith("2"):
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.subheader("📍 填寫外站旅程")
-            cc1, cc2 = st.columns(2)
-            d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
-            d1_date_input = cc1.date_input("📅 D1 預計出發日", value=d2_date - timedelta(days=1))
-            
-            d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
-            d4_date_input = cc2.date_input("📅 D4 預計出發日", value=d3_date + timedelta(days=1))
+        # 💡 Admin 專屬的 Email 自動填入機制
+        default_email = "hanb0516@gmail.com" if st.session_state.username == "scottiefor3" else ""
 
-        st.divider()
-        
         if task_mode.startswith("1"):
-            # 💡 選項1：加入區域複選框
+            st.divider()
+            st.subheader("Step 3: 選擇外站掃描區域")
             selected_regions = st.multiselect(
-                "🌍 選擇外站掃描區域",
+                "🌍 請選擇您想掃描的外站區域",
                 ["東北亞", "東南亞"],
                 default=["東北亞", "東南亞"]
             )
             
-            region_str = "/".join(selected_regions) if selected_regions else "尚未選擇"
+            region_str = " 與 ".join(selected_regions) if selected_regions else "尚未選擇"
             st.info(f"💡 系統將自動為您掃描 **{region_str} 各大機場**。\n\n外站接駁日期將鎖定在 **{d2_date - timedelta(days=1)}** 與 **{d3_date + timedelta(days=1)}** 以求最高效率。")
             
-            email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", placeholder="例如: yourname@gmail.com")
+            st.divider()
+            st.subheader("Step 4: 確認與執行")
+            email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", value=default_email, placeholder="例如: yourname@gmail.com")
             
             if st.button("🚀 開始自動精算並寄信", type="primary"):
                 if not selected_regions:
@@ -457,12 +455,9 @@ else:
                 else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
                     
-                    # 💡 根據勾選的區域動態生成搜尋的機場代碼
                     target_codes = []
-                    if "東北亞" in selected_regions:
-                        target_codes.extend(list(ALL_HUBS["東北亞"].keys()))
-                    if "東南亞" in selected_regions:
-                        target_codes.extend(list(ALL_HUBS["東南亞"].keys()))
+                    if "東北亞" in selected_regions: target_codes.extend(list(ALL_HUBS["東北亞"].keys()))
+                    if "東南亞" in selected_regions: target_codes.extend(list(ALL_HUBS["東南亞"].keys()))
                         
                     tasks = []
                     d1_dt, d4_dt = d2_date - timedelta(days=1), d3_date + timedelta(days=1)
@@ -478,8 +473,20 @@ else:
                     asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc))
 
         else:
+            st.divider()
+            st.subheader("Step 3: 填寫外站旅程")
+            cc1, cc2 = st.columns(2)
+            d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
+            d1_date_input = cc1.date_input("📅 D1 預計出發日", value=d2_date - timedelta(days=1))
+            
+            d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
+            d4_date_input = cc2.date_input("📅 D4 預計出發日", value=d3_date + timedelta(days=1))
+
             st.warning("⚠️ 系統將以您設定的【外站預計出發日】為基準，自動發散搜尋 **前後 30 天（共約 60 天範圍）** 內的外站組合。且會自動過濾掉不合理的日期（確保 D1 早於 D2，D4 晚於 D3）。")
-            email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", placeholder="例如: yourname@gmail.com")
+            
+            st.divider()
+            st.subheader("Step 4: 確認與執行")
+            email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", value=default_email, placeholder="例如: yourname@gmail.com")
             
             if st.button("🚀 展開 60 天範圍精算並寄信", type="primary"):
                 if not email_input: st.error("🚨 請輸入 Email！")
