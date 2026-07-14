@@ -137,6 +137,10 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
     CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
     CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
+    
+    # 💡 專為阿聯酋建立的規則
+    EK_PRIMARY = {"EK"}
+    EK_INTERLINE = {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
     async with sem:
         for _ in range(2):
@@ -160,6 +164,9 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                                         primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
                                         if op in primaries or mk in primaries: has_primary = True
                                         elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                    elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
+                                        if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
+                                        elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
                                 
                                 if airline_mode != "🌍 無限制航空公司":
                                     if not has_primary or not all_legs_valid:
@@ -198,6 +205,8 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
     CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
     CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
+    EK_PRIMARY = {"EK"}
+    EK_INTERLINE = {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
     async with sem:
         for _ in range(2):
@@ -231,6 +240,10 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                                     else:
                                         if seg_idx in [0, 3] and not alliance_flag: all_legs_valid = False
                                         elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                        
+                                elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
+                                    if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
+                                    elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
                                 
                                 seg_flights.append(f"{mk or op}{f.get('flightNumber', '')}")
                             
@@ -280,7 +293,9 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
             now = time.time()
             if now - last_upd >= 2.0 or i == total_tasks - 1:
                 rps = (i+1)/(now - start_t) if (now - start_t) > 0 else 0
-                bar.progress((i+1)/total_tasks, text=f"⚡ 搜尋進度: {i+1}/{total_tasks} | {rps:.1f} RPS | 發現結果: {len(final_res)} 組")
+                eta = (total_tasks - (i+1)) / rps if rps > 0 else 0
+                
+                bar.progress((i+1)/total_tasks, text=f"⚡ 搜尋進度: {i+1}/{total_tasks} | {rps:.1f} RPS | 剩餘時間: {int(eta//60)}分{int(eta%60)}秒 | 發現結果: {len(final_res)} 組")
                 
                 if final_res:
                     temp_sorted = sorted(final_res, key=lambda x: x['total'])[:50]
@@ -417,8 +432,10 @@ else:
         
     with col_right:
         st.subheader("⚙️ 偏好設定")
-        cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
-        airline_filter = st.selectbox("✈️ 航空公司過濾", ["🌸 華航限定 (直營/聯營)", "🌳 長榮限定 (直營/聯營)", "🌍 無限制航空公司"], index=0)
+        # 💡 加入 FIRST (頭等艙) 選項
+        cab = st.selectbox("艙等", ["FIRST", "BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"], index=1)
+        # 💡 加入阿聯酋航空選項
+        airline_filter = st.selectbox("✈️ 航空公司過濾", ["🌸 華航限定 (直營/聯營)", "🌳 長榮限定 (直營/聯營)", "🇦🇪 阿聯酋航空限定 (Emirates)", "🌍 無限制航空公司"], index=0)
         
         alliance_inc = False
         if "華航" in airline_filter:
@@ -503,27 +520,27 @@ else:
             st.divider()
             st.subheader("Step 3: 填寫外站旅程")
             cc1, cc2 = st.columns(2)
-            # 💡 移除日期輸入框，只保留地點選擇
             d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
             d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
+            
+            search_range = st.slider("📅 前後掃描範圍 (天數)：", min_value=7, max_value=90, value=30, step=1, 
+                                     help="數值越大，產生的 API 費用越高，掃描時間也越長。請謹慎選擇。")
 
-            # 💡 更新提示文案，強調 40,000 筆資料的大數據掃描
-            st.warning("⚠️ 系統將以您設定的核心日期為基準，自動掃描 **D2 出發前 200 天**、與 **D3 回程後 200 天**，共計約 40,000 種組合的大數據運算！")
+            st.warning(f"⚠️ 系統將以您設定的核心日期為基準，自動掃描 **D2 出發前 {search_range} 天**、與 **D3 回程後 {search_range} 天**，為您找出這個範圍內最便宜的破盤價！")
             
             st.divider()
             st.subheader("Step 4: 確認與執行")
             email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", value=default_email, placeholder="例如: yourname@gmail.com")
             
-            if st.button("🚀 展開 40,000 筆深度精算並寄信", type="primary"):
+            total_est_tasks = search_range * search_range
+            if st.button(f"🚀 展開 {total_est_tasks:,} 筆深度精算並寄信", type="primary"):
                 if not email_input: st.error("🚨 請輸入 Email！")
                 else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
                     h1_fix, h4_fix = d1_loc.split(" ")[0], d4_loc.split(" ")[0]
                     
-                    # 💡 D1 從 (D2-200天) 掃到 (D2-1天)
-                    d1_dates = [d2_date - timedelta(days=i) for i in range(200, 0, -1)]
-                    # 💡 D4 從 (D3+1天) 掃到 (D3+200天)
-                    d4_dates = [d3_date + timedelta(days=i) for i in range(1, 201)]
+                    d1_dates = [d2_date - timedelta(days=i) for i in range(search_range, 0, -1)]
+                    d4_dates = [d3_date + timedelta(days=i) for i in range(1, search_range + 1)]
                     
                     tasks = []
                     for d1 in d1_dates:
@@ -534,5 +551,5 @@ else:
                                  {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                             tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
                     
-                    conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} 40k-scan)", datetime.now())); conn.commit(); conn.close()
+                    conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} {search_range}-days)", datetime.now())); conn.commit(); conn.close()
                     asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price))
