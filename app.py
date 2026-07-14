@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v44.6 MEGA SPEED", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v44.7 MEGA SPEED", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -149,7 +149,7 @@ def generate_matrix_html(res, ref, title, core_mode):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v44.6"):
+def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v44.7"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "站長信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -210,8 +210,17 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     
+    # 💡 定義核心直營與官方白名單聯營夥伴
     SKYTEAM_CODES = {"CI", "AF", "KL", "DL", "KE", "MU", "MF", "VN", "GA", "AM", "AR", "UX", "KQ", "ME", "SV", "RO", "VS", "SK", "AZ"}
-    STAR_ALLIANCE_CODES = {"BR", "UA", "AC", "NH", "OZ", "SQ", "TG", "CA", "ZH", "NZ", "LH", "LX", "OS", "SN", "LO", "TK", "MS", "SA", "ET", "CM", "AV", "TP", "A3", "AI"}
+    STAR_ALLIANCE_CODES = {"BR", "UA", "AC", "LH", "LX", "OS", "SN", "NH", "OZ", "SQ", "TG", "CA", "ZH", "NZ", "LO", "TK", "MS", "SA", "ET", "CM", "AV", "TP", "A3", "AI"}
+    
+    CI_PRIMARY = {"CI", "AE"} # 華航與華信
+    BR_PRIMARY = {"BR", "B7"} # 長榮與立榮
+    
+    # 針對華航的合法延伸聯程白名單 (包含你提供的截圖證實: LH, BA, OS)
+    CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
+    # 針對長榮的合法延伸聯程白名單
+    BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
 
     async with sem:
         for _ in range(2):
@@ -225,10 +234,13 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
                     for o in offers:
                         l_sum = []
                         is_valid_airline = True
-                        for seg in o.get('segments', []):
+                        segments = o.get('segments', [])
+                        
+                        # 💡 逐段檢查 (seg_idx: 0=D1, 1=D2, 2=D3, 3=D4)
+                        for seg_idx, seg in enumerate(segments):
                             seg_flights = []
-                            # 💡 v44.6 升級邏輯：只要這個「大區段」裡有任何一段是目標航空，就給過！
-                            segment_valid = False 
+                            has_primary = False
+                            all_legs_valid = True
                             
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
@@ -236,30 +248,41 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
                                 op, mk = c_info.get('operatingCarrier', ''), c_info.get('marketingCarrier', '')
                                 
                                 if airline_mode == "🌸 華航限定 (直營/聯營)":
-                                    allowed_carriers = SKYTEAM_CODES if alliance_flag else {"CI"}
-                                    if op in allowed_carriers or mk in allowed_carriers:
-                                        segment_valid = True
+                                    primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
+                                    if op in primaries or mk in primaries:
+                                        has_primary = True
+                                    else:
+                                        # D1 / D4 必須是純直營，不接受聯程 (除非勾選天合聯盟)
+                                        if seg_idx in [0, 3] and not alliance_flag:
+                                            all_legs_valid = False
+                                        # D2 / D3 主行程允許經過白名單審核的聯程
+                                        elif op not in CI_INTERLINE and mk not in CI_INTERLINE:
+                                            all_legs_valid = False
+
                                 elif airline_mode == "🌳 長榮限定 (直營/聯營)":
-                                    allowed_carriers = STAR_ALLIANCE_CODES if alliance_flag else {"BR"}
-                                    if op in allowed_carriers or mk in allowed_carriers:
-                                        segment_valid = True
-                                else:
-                                    segment_valid = True
+                                    primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
+                                    if op in primaries or mk in primaries:
+                                        has_primary = True
+                                    else:
+                                        if seg_idx in [0, 3] and not alliance_flag:
+                                            all_legs_valid = False
+                                        elif op not in BR_INTERLINE and mk not in BR_INTERLINE:
+                                            all_legs_valid = False
                                 
                                 seg_flights.append(f"{mk or op}{f.get('flightNumber', '')}")
                             
-                            if airline_mode != "🌍 無限制航空公司" and not segment_valid:
-                                is_valid_airline = False
-                                
+                            if airline_mode != "🌍 無限制航空公司":
+                                # 如果該段沒有核心航空，或者夾雜了非白名單的雜牌航空，直接整筆作廢
+                                if not has_primary or not all_legs_valid:
+                                    is_valid_airline = False
+                                    break
+                                    
                             l_sum.append("|".join(seg_flights))
                             
-                        if is_valid_airline:
+                        if is_valid_airline and len(l_sum) == 4:
                             p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
-                            
-                            while len(l_sum) < 4:
-                                l_sum.append("")
-                                
                             valid.append({"total": p, "legs": l_sum, "h1": h1, "d2o": d2o, "d2d": d2d, "d3o": d3o, "d3d": d3d, "h4": h4, "d1": d1, "d2": d2, "d3": d3, "d4": d4})
+                            
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 elif res.status_code == 429:
                     st.toast("⚠️ API 請求過於頻繁 (429)，正在自動重試...")
@@ -277,7 +300,7 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v44.6 MEGA)")
+    st.header("⚙️ 獵殺控制台 (v44.7 MEGA)")
     core_mode = st.radio("🎯 核心旅程模式", ["A. 鎖定 D2/D3 (常規尋找便宜外站)", "B. 鎖定 D1/D4 (已知外站, 尋找主行程)"])
     st.divider()
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
@@ -461,7 +484,7 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v44.6 MEGA 火力全開版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v44.7 MEGA 火力全開版)", use_container_width=True):
     st.session_state.valid_offers = []; asyncio.run(start_hunt())
 
 if st.session_state.valid_offers:
