@@ -15,7 +15,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與靜態快取
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | v44.8 MEGA SPEED", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary | v44.9 MEGA SPEED", page_icon="✈️", layout="wide")
 
 @st.cache_data
 def get_hubs():
@@ -35,7 +35,7 @@ def get_hubs():
         "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光", "DEL": "新德里", "BOM": "孟買"},
         "中東/非洲": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "AUH": "阿布達比", "CAI": "開羅", "JNB": "約翰尼斯堡"},
         "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都柏林"},
-        "東歐/南歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達嘴斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典"},
+        "東歐/南歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典"},
         "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華", "LAS": "拉斯維加斯", "DEN": "丹佛", "HNL": "檀香山", "PHX": "鳳凰城", "SLC": "鹽湖城"},
         "美東/中部": {"JFK": "紐約甘迺迪", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多", "DFW": "達拉斯", "MCO": "奧蘭多", "MIA": "邁阿密", "BOS": "波士頓", "ATL": "亞特蘭大", "IAD": "華盛頓", "DTW": "底特律", "MSP": "明尼亞波利斯"},
         "南美": {"GRU": "聖保羅", "EZE": "布宜諾斯艾利斯", "SCL": "聖地牙哥"},
@@ -149,7 +149,7 @@ def generate_matrix_html(res, ref, title, core_mode):
         h.append("".join(row))
     return "".join(h) + "</table>"
 
-def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v44.8"):
+def send_detailed_email(res, ref, elapsed, dps, aaa, bbb, cab, core_mode, user_email="", version="v44.9"):
     if not S_SENDER or not S_PWD or not S_RECEIVER: return False, "站長信箱未設定"
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
@@ -293,7 +293,7 @@ async def fetch_api(client, sem, task_data, rid, airline_mode, alliance_flag):
 # 3. UI 介面
 # ==========================================
 with st.sidebar:
-    st.header("⚙️ 獵殺控制台 (v44.8 MEGA)")
+    st.header("⚙️ 獵殺控制台 (v44.9 MEGA)")
     core_mode = st.radio("🎯 核心旅程模式", ["A. 鎖定 D2/D3 (常規尋找便宜外站)", "B. 鎖定 D1/D4 (已知外站, 尋找主行程)"])
     st.divider()
     cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
@@ -345,7 +345,6 @@ if not is_mode_b:
 trip_mode = st.radio("行程模式", ["來回", "多點進出"], horizontal=True)
 c1, c2 = st.columns(2)
 
-# 💡 依照要求修改了預設值為 CPH 與對應的 2027 年日期
 if trip_mode == "來回":
     t_l1 = "D1 起點 (外站回台)" if is_mode_b else "去程起點 (D2)"
     t_l2 = "D4 終點 (台灣出發)" if is_mode_b else "去程目的 (D3)"
@@ -386,13 +385,17 @@ b_d1, b_d2 = ("D2 日期範圍", "D3 日期範圍") if is_mode_b else ("D1 日�
 sync = st.checkbox(b_sync, value=True)
 cr1, cr4 = st.columns(2)
 
-# 💡 完美優化：透過動態 Key 綁定技術，讓區域過濾器與站點選擇器完美連動
+# 💡 完美無 Bug 的動態狀態綁定：切換模式絕不當機，選項自動對齊
 with cr1:
-    regs1 = st.multiselect(f"🌍 區域快速過濾 ({'D2 目的地' if is_mode_b else 'D1 起點'})", list(ACTIVE_HUBS.keys()), key="regs1")
-    flt_opts1 = [f"{c} ({n})" for r in regs1 for c, n in ACTIVE_HUBS[r].items()] if regs1 else ACTIVE_CITIES
-    d1_key = f"bot_sel1_{hash(tuple(regs1))}" # 動態 Key，當區域改變時會自動重置底下的多選框
+    hub_mode = "CI" if ACTIVE_HUBS == CI_HUBS else "ALL"
+    regs1 = st.multiselect(f"🌍 區域快速過濾 ({'D2 目的地' if is_mode_b else 'D1 起點'})", list(ACTIVE_HUBS.keys()), key=f"regs1_{hub_mode}")
     
-    bot_locs1 = st.multiselect(f"{b_l1}", options=ACTIVE_CITIES, default=flt_opts1 if regs1 else [], key=d1_key)
+    if regs1:
+        flt_opts1 = [f"{c} ({n})" for r in regs1 for c, n in ACTIVE_HUBS[r].items()]
+        bot_locs1 = st.multiselect(b_l1, options=flt_opts1, default=flt_opts1)
+    else:
+        bot_locs1 = st.multiselect(b_l1, options=ACTIVE_CITIES, default=[])
+        
     d_bot1_def = top_dt1 + timedelta(days=1) if is_mode_b else top_dt1 - timedelta(days=1)
     bot_r1 = st.date_input(b_d1, value=(d_bot1_def,))
 
@@ -402,12 +405,14 @@ with cr4:
         d_bot2_def = top_dt2 - timedelta(days=1) if is_mode_b else top_dt2 + timedelta(days=1)
         bot_r2 = st.date_input(b_d2, value=(d_bot2_def,))
     else:
-        # 如果不同步，D4 獲得自己專屬的區域快速過濾
-        regs2 = st.multiselect(f"🌍 區域快速過濾 ({'D3 出發站' if is_mode_b else 'D4 終點'})", list(ACTIVE_HUBS.keys()), key="regs2")
-        flt_opts2 = [f"{c} ({n})" for r in regs2 for c, n in ACTIVE_HUBS[r].items()] if regs2 else ACTIVE_CITIES
-        d4_key = f"bot_sel2_{hash(tuple(regs2))}" # 動態 Key
+        regs2 = st.multiselect(f"🌍 區域快速過濾 ({'D3 出發站' if is_mode_b else 'D4 終點'})", list(ACTIVE_HUBS.keys()), key=f"regs2_{hub_mode}")
         
-        bot_locs2 = st.multiselect(f"{b_l2}", options=ACTIVE_CITIES, default=flt_opts2 if regs2 else [], key=d4_key)
+        if regs2:
+            flt_opts2 = [f"{c} ({n})" for r in regs2 for c, n in ACTIVE_HUBS[r].items()]
+            bot_locs2 = st.multiselect(b_l2, options=flt_opts2, default=flt_opts2)
+        else:
+            bot_locs2 = st.multiselect(b_l2, options=ACTIVE_CITIES, default=[])
+            
         d_bot2_def = top_dt2 - timedelta(days=1) if is_mode_b else top_dt2 + timedelta(days=1)
         bot_r2 = st.date_input(b_d2, value=(d_bot2_def,))
 
@@ -486,7 +491,7 @@ async def start_hunt():
         else: st.success("🎯 獵殺完成！")
     finally: st.session_state.run_id = None
 
-if st.button("🚀 啟動極速獵殺 (v44.8 MEGA 火力全開版)", use_container_width=True):
+if st.button("🚀 啟動極速獵殺 (v44.9 MEGA 火力全開版)", use_container_width=True):
     if not bot_locs1 or not bot_locs2:
         st.warning("⚠️ 請至少選擇一個探索站點！")
     else:
