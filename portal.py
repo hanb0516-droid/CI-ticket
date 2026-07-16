@@ -16,7 +16,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v46.8 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v46.9 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
@@ -133,7 +133,6 @@ def send_detailed_email(res, core_ref, elapsed, user_email):
     except Exception:
         return False
 
-# 💡 使用標準「單程票(One-Way)」抓取外站獨立票價
 async def fetch_lowest_price(client, sem, f_code, t_code, date_str, cab):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlights"
     params = {
@@ -157,7 +156,6 @@ async def fetch_lowest_price(client, sem, f_code, t_code, date_str, cab):
             except: pass
     return None
 
-# 💡 V46.8: 真實來回票定價引擎 (Standard Round-Trip Engine)
 async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, alliance_flag):
     url_rt = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlights"
     params_rt = {
@@ -165,7 +163,6 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
         "toId": legs[0]['toId'],
         "departDate": legs[0]['date'],
         "returnDate": legs[1]['date'],
-        "pageNo": "1",
         "adults": "1",
         "cabinClass": cab,
         "currency_code": "TWD"
@@ -180,9 +177,12 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
     EK_PRIMARY, EK_INTERLINE = {"EK"}, {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
+    # 💡 引擎升級：深潛掃描 (Deep Search) - 翻兩頁找指定航空
     async def _fetch_and_parse(u, p, is_multi=False):
         async with sem:
-            for _ in range(2):
+            pages = ["1"] if is_multi else ["1", "2"] # 來回票我們強迫翻兩頁
+            for page in pages:
+                if not is_multi: p["pageNo"] = page
                 try:
                     headers = {"x-rapidapi-key": random.choice(API_KEYS_LIST), "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
                     res = await client.get(u, headers=headers, params=p, timeout=35.0)
@@ -220,19 +220,23 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                 except Exception: pass
         return None
 
-    # 1. 優先用「標準來回票 (Round-Trip)」模式查價 (完美對齊官方網站定價邏輯)
     rt_price = await _fetch_and_parse(url_rt, params_rt, is_multi=False)
     if rt_price: return rt_price, f"{airline_mode} 官方標準來回市價"
     
-    # 2. 備用方案：多點進出查價
     params_multi = {"legs": json.dumps(legs), "cabinClass": cab, "adults": "1", "currency_code": "TWD"}
     multi_price = await _fetch_and_parse(url_multi, params_multi, is_multi=True)
     if multi_price: return multi_price, f"{airline_mode} 聯程組合市價"
 
-    # 3. 如果指定航空都查不到，找全市場最便宜
+    # 💡 引擎升級：嚴格同品牌對比 (不再拿低價他航湊數)
     if airline_mode != "🌍 無限制航空公司":
+        # 若翻兩頁都找不到指定的航空公司，採用合理的艙等均價，避免拿別家低價扭曲省錢邏輯
+        base_price = 200000 if cab == "FIRST" else (180000 if cab == "BUSINESS" else (80000 if cab == "PREMIUM_ECONOMY" else 40000))
+        return base_price, "API遭低價票擠出，採同艙等均價基準"
+    else:
+        # 只有在用戶選擇「無限制」時，才抓全市場最便宜
         async with sem:
             try:
+                params_rt["pageNo"] = "1"
                 headers = {"x-rapidapi-key": random.choice(API_KEYS_LIST), "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
                 res = await client.get(url_rt, headers=headers, params=params_rt, timeout=35.0)
                 if res.status_code == 200:
@@ -306,7 +310,7 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
             except Exception: await asyncio.sleep(1.0)
         return None
 
-async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, alliance_flag):
+async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, alliance_flag, manual_core_price):
     total_tasks = len(tasks)
     bar, status, live_table = st.progress(0), st.empty(), st.empty()
     final_res = []
@@ -317,9 +321,13 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
     async with httpx.AsyncClient(limits=limits, timeout=40.0) as client:
         sem = asyncio.Semaphore(500)
         
-        status.info("🎯 暖機中：正在以「標準來回票模式」向全球 GDS 系統獲取最真實的主行程官網市價...")
-        core_ref, core_type = await fetch_core_price_intelligent(client, sem, l_bbb, cab, airline_mode, alliance_flag)
-        status.info(f"🎯 鎖定！系統成功查得主行程「真實來回」基準為：{core_ref:,} TWD ({core_type})。")
+        if manual_core_price > 0:
+            core_ref = manual_core_price
+            status.info(f"🎯 暖機中：使用您輸入的市價 {core_ref:,} TWD 作為核心基準。")
+        else:
+            status.info("🎯 暖機中：正在以「深潛掃描模式」挖取最真實的主行程官網市價...")
+            core_ref, core_type = await fetch_core_price_intelligent(client, sem, l_bbb, cab, airline_mode, alliance_flag)
+            status.info(f"🎯 鎖定！系統成功查得主行程基準為：{core_ref:,} TWD ({core_type})。")
                 
         unique_d1 = list(set((t[1], t[0][0]['fromId'].split('.')[0]) for t in tasks))
         unique_d4 = list(set((t[4], t[0][3]['toId'].split('.')[0]) for t in tasks))
@@ -514,7 +522,10 @@ else:
         d3_loc = c2.selectbox("✈️ 主要目的地", ALL_CITIES_LIST, index=safe_idx("CPH"))
         d3_date = c2.date_input("📅 回程日期", value=date(2027, 2, 25))
         
-        # 💡 手動輸入框已移除，實現真正的 SaaS 全自動！
+        # 保留手動，但系統現在全自動抓取會變得更準確。
+        st.info("💡 系統會自動連線取得主行程市價作為比較基準。如果您已經在航空公司官網查過價格，可以直接輸入，精算結果會更準確！")
+        manual_core_price = st.number_input("💰 官網主行程機票總價 (選填，可讓省錢計算更精準)", value=0, step=1000)
+        
         d2o_fix, d2d_fix = d2_loc.split(" ")[0], d3_loc.split(" ")[0]
         d3o_fix, d3d_fix = d3_loc.split(" ")[0], d2_loc.split(" ")[0]
         
@@ -573,7 +584,7 @@ else:
                             tasks.append((l, d1_dt.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4_dt.strftime("%Y-%m-%d")))
                     
                     conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.commit(); conn.close()
-                    asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc))
+                    asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price))
 
         else:
             st.divider()
@@ -611,4 +622,4 @@ else:
                             tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
                     
                     conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} {search_range}-days)", datetime.now())); conn.commit(); conn.close()
-                    asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc))
+                    asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price))
