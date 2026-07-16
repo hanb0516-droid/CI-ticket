@@ -16,7 +16,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v49.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v50.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
@@ -76,42 +76,58 @@ def safe_idx(target):
 # ==========================================
 # 2. 核心搜尋與 DataFrame 轉換
 # ==========================================
-# 💡 V49.0 新增：專門產生供 Streamlit UI 顯示的漂亮 DataFrame
+# 💡 V50.0 修改：全面優化欄位名稱、順序與內容拼裝邏輯
 def create_dataframe(res):
     if not res: return pd.DataFrame()
     df_data = []
     for r in res[:100]:
         diff = r['diff']
         diff_str = f"🟢 省 {int(diff):,}" if diff >= 0 else f"🔴 貴 {abs(int(diff)):,}"
+        
+        # 萃取簡短日期 (MM/DD)
+        d1_short = r['d1'][5:].replace('-','/')
+        d2_short = r['d2'][5:].replace('-','/')
+        d3_short = r['d3'][5:].replace('-','/')
+        d4_short = r['d4'][5:].replace('-','/')
+        
+        # 拼裝完整航線與時間 (包含接駁邏輯)
+        route_full = f"{r['h1']}({d1_short}) ➔ {r['d2o']} | {r['d2o']}({d2_short}) ➔ {r['d2d']} | {r['d3o']}({d3_short}) ➔ {r['d3d']} | {r['d3d']}({d4_short}) ➔ {r['h4']}"
+        route_pure = f"{r['h1']} ➔ {r['d2o']} ➔ {r['d2d']} ➔ {r['d3d']} ➔ {r['h4']}"
+
         df_data.append({
             "勾選": False,
             "總價(TWD)": f"💰 {r['total']:,}",
-            "價差對比": diff_str,
-            "D1出發": f"{r['h1']} {AIRPORT_MAP.get(r['h1'],'')} ({r['d1'][5:].replace('-','/')})",
-            "D4回程": f"{r['h4']} {AIRPORT_MAP.get(r['h4'],'')} ({r['d4'][5:].replace('-','/')})",
             "分開買市價": f"{int(r['ref_price']):,}",
+            "價差對比": diff_str,
+            "完整航線與日期": route_full,
             "航班組合": " | ".join(r['legs']),
             "_h1": r['h1'],
-            "_h4": r['h4']
+            "_h4": r['h4'],
+            "_route_pure": route_pure
         })
     return pd.DataFrame(df_data)
 
-# 信件依然保留 HTML 格式，但我把字體加大了！
+# 信件內容也同步修改
 def generate_table_html(res, core_ref):
-    header = "<tr style='background:#333;color:#fff;font-size:16px;'><th>總價(TWD)</th><th>真實分開買對比</th><th>D1 站點/日期</th><th>D4 站點/日期</th><th>探索路線</th><th>D1/D2/D3/D4 航班</th></tr>"
+    header = "<tr style='background:#333;color:#fff;font-size:16px;'><th>總價(TWD)</th><th>分開買市價</th><th>價差對比</th><th>完整航線與日期</th><th>航班組合</th></tr>"
     rows = []
     for r in res[:100]:
         diff = r['diff']
         color = "#00e676" if diff >= 0 else "#ff5252"
         diff_str = f"<span style='color:{color}; font-size:16px;'><b>{'省' if diff>=0 else '貴'} {abs(diff):,}</b></span>"
-        ref_str = f"<span style='color:#666; font-size:12px;'>分開買約 {r['ref_price']:,}</span><br>"
-        route_str = f"<b>{r['h1']}</b><span style='color:#666;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span><b>{r['h4']}</b>"
+        
+        d1_short = r['d1'][5:].replace('-','/')
+        d2_short = r['d2'][5:].replace('-','/')
+        d3_short = r['d3'][5:].replace('-','/')
+        d4_short = r['d4'][5:].replace('-','/')
+        route_str = f"{r['h1']}({d1_short}) ➔ {r['d2o']} | {r['d2o']}({d2_short}) ➔ {r['d2d']} | {r['d3o']}({d3_short}) ➔ {r['d3d']} | {r['d3d']}({d4_short}) ➔ {r['h4']}"
         f_str = f"<span style='color:#666; font-size:12px;'>{r['legs'][0]}<br>{r['legs'][1]}<br>{r['legs'][2]}<br>{r['legs'][3]}</span>"
         
-        row_html = f"<tr><td><b style='font-size:16px;'>{r['total']:,}</b></td><td>{ref_str}{diff_str}</td>"
-        row_html += f"<td style='font-size:14px;'><b>{r['h1']} {AIRPORT_MAP.get(r['h1'],'')}</b><br>{r['d1'][5:].replace('-','/')}</td>"
-        row_html += f"<td style='font-size:14px;'><b>{r['h4']} {AIRPORT_MAP.get(r['h4'],'')}</b><br>{r['d4'][5:].replace('-','/')}</td>"
-        row_html += f"<td><span style='font-size:13px;'>{route_str}</span></td><td>{f_str}</td></tr>"
+        row_html = f"<tr><td><b style='font-size:16px;'>{r['total']:,}</b></td>"
+        row_html += f"<td style='font-size:14px;color:#888;'>{int(r['ref_price']):,}</td>"
+        row_html += f"<td>{diff_str}</td>"
+        row_html += f"<td style='font-size:14px;'>{route_str}</td>"
+        row_html += f"<td>{f_str}</td></tr>"
         rows.append(row_html)
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;'><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
 
@@ -336,11 +352,22 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
                 eta = (total_tasks - (i+1)) / rps if rps > 0 else 0
                 bar.progress((i+1)/total_tasks, text=f"⚡ 搜尋進度: {i+1}/{total_tasks} | {rps:.1f} RPS | 剩餘時間: {int(eta//60)}分{int(eta%60)}秒 | 發現結果: {len(final_res)} 組")
                 
-                # 💡 V49.0 即時呈現也改用原生 DataFrame，字體又大又清晰
                 if final_res:
                     temp_sorted = sorted(final_res, key=lambda x: x['total'])[:50]
                     temp_df = create_dataframe(temp_sorted)
-                    live_table.dataframe(temp_df.drop(columns=["勾選", "_h1", "_h4"]), hide_index=True, use_container_width=True)
+                    # 💡 即時開獎也套用最佳化寬度
+                    live_table.dataframe(
+                        temp_df.drop(columns=["勾選", "_h1", "_h4", "_route_pure"]),
+                        column_config={
+                            "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
+                            "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
+                            "價差對比": st.column_config.TextColumn("價差對比", width="small"),
+                            "完整航線與日期": st.column_config.TextColumn("完整航線與日期", width="large"),
+                            "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
                 last_upd = now
     
     elapsed = time.time() - start_t
@@ -426,6 +453,7 @@ if st.session_state.username is None:
     login_screen()
 else:
     is_my_turn = check_queue()
+    
     if not is_my_turn:
         st.title("⏳ 請稍候，系統排隊中...")
         st.info("目前運算資源正在被使用中，請不要關閉網頁。輪到您時畫面會自動解鎖。")
@@ -571,7 +599,7 @@ else:
                     asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "report_data"))
 
         # ==========================================
-        # 📊 階段 1：主報表展示區 (V49.0 - 原生表格內互動打勾)
+        # 📊 階段 1：主報表展示區 (V50.0 - 寬度與順序最佳化)
         # ==========================================
         if st.session_state.report_data:
             st.divider()
@@ -586,22 +614,29 @@ else:
                 
             display_df = create_dataframe(display_data)
             
-            # 💡 V49.0：產生可打勾的互動式 DataFrame
+            # 💡 V50.0：套用全新直覺順序與寬度控制
             edited_df = st.data_editor(
                 display_df,
+                column_order=["勾選", "總價(TWD)", "分開買市價", "價差對比", "完整航線與日期", "航班組合"],
                 column_config={
-                    "勾選": st.column_config.CheckboxColumn("📌 勾選深潛", default=False),
-                    "_h1": None, # 隱藏底層資料
-                    "_h4": None, # 隱藏底層資料
+                    "勾選": st.column_config.CheckboxColumn("📌 勾選深潛", default=False, width="small"),
+                    "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
+                    "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
+                    "價差對比": st.column_config.TextColumn("價差對比", width="small"),
+                    "完整航線與日期": st.column_config.TextColumn("完整航線與日期", width="large"),
+                    "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
+                    "_h1": None, 
+                    "_h4": None, 
+                    "_route_pure": None
                 },
-                disabled=["總價(TWD)", "價差對比", "D1出發", "D4回程", "分開買市價", "航班組合"], # 保護其他欄位不被竄改
+                disabled=["總價(TWD)", "分開買市價", "價差對比", "完整航線與日期", "航班組合"], 
                 hide_index=True,
                 use_container_width=True,
                 key="report_data_editor"
             )
             
             # ==========================================
-            # 🚀 階段 2：Step 5 深度探索引擎 (僅限選項1且有打勾時出現)
+            # 🚀 階段 2：Step 5 深度探索引擎
             # ==========================================
             if task_mode.startswith("1"):
                 selected_rows = edited_df[edited_df["勾選"] == True]
@@ -612,12 +647,13 @@ else:
                         
                     sel_h1 = selected_rows.iloc[0]["_h1"]
                     sel_h4 = selected_rows.iloc[0]["_h4"]
+                    sel_route_pure = selected_rows.iloc[0]["_route_pure"]
                     
                     st.divider()
-                    st.markdown(f"<h3 style='color: #ff5252;'>🚀 Step 5: 尋找 {sel_h1} / {sel_h4} 更便宜的時間</h3>", unsafe_allow_html=True)
+                    st.markdown(f"<h3 style='color: #ff5252;'>🚀 Step 5: 尋找 {sel_route_pure} 更便宜的時間</h3>", unsafe_allow_html=True)
                     st.info("💡 系統已為您鎖定上方勾選的航線組合。按下按鈕後，我們將發動 40,000 筆大數據運算，找出前後 200 天內最便宜的破盤組合！")
                     
-                    if st.button(f"🔥 立即啟動 {sel_h1} / {sel_h4} 深度探索", type="primary"):
+                    if st.button(f"🔥 立即啟動深度探索", type="primary"):
                         st.session_state.deep_report_data = None
                         rid = str(uuid.uuid4()); st.session_state.run_id = rid
                         
@@ -637,7 +673,7 @@ else:
                         asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "deep_report_data"))
 
         # ==========================================
-        # 📈 階段 3：Step 5 深度結果展示區 (獨立在最下方)
+        # 📈 階段 3：Step 5 深度結果展示區 
         # ==========================================
         if st.session_state.deep_report_data:
             st.divider()
@@ -652,9 +688,16 @@ else:
                 
             display_df_deep = create_dataframe(display_data_deep)
             
-            # 深潛結果不需要再打勾了，所以只顯示純 DataFrame
             st.dataframe(
-                display_df_deep.drop(columns=["勾選", "_h1", "_h4"]),
+                display_df_deep.drop(columns=["勾選", "_h1", "_h4", "_route_pure"]),
+                column_order=["總價(TWD)", "分開買市價", "價差對比", "完整航線與日期", "航班組合"],
+                column_config={
+                    "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
+                    "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
+                    "價差對比": st.column_config.TextColumn("價差對比", width="small"),
+                    "完整航線與日期": st.column_config.TextColumn("完整航線與日期", width="large"),
+                    "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
+                },
                 hide_index=True,
                 use_container_width=True
             )
