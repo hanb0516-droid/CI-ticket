@@ -33,6 +33,7 @@ if "run_id" not in st.session_state: st.session_state.run_id = None
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 
 try:
+    # 💡 乖乖切回單一付費 API KEY
     API_KEY = st.secrets["BOOKING_API_KEY"]
     S_SENDER = st.secrets.get("EMAIL_SENDER", "")
     S_PWD = st.secrets.get("EMAIL_PASSWORD", "")
@@ -52,7 +53,7 @@ def get_hubs():
         "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光", "DEL": "新德里", "BOM": "孟買"},
         "中東/非洲": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "AUH": "阿布達比", "CAI": "開羅", "JNB": "約翰尼斯堡"},
         "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都柏林"},
-        "東歐/南歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典"},
+        "東歐/南歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬اديم", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典"},
         "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華", "LAS": "拉斯維加斯", "DEN": "丹佛", "HNL": "檀香山", "PHX": "鳳凰城", "SLC": "鹽湖城"},
         "美東/中部": {"JFK": "紐約甘迺迪", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多", "DFW": "達拉斯", "MCO": "奧蘭多", "MIA": "邁阿密", "BOS": "波士頓", "ATL": "亞特蘭大", "IAD": "華盛頓", "DTW": "底特律", "MSP": "明尼亞波利斯"},
         "南美": {"GRU": "聖保羅", "EZE": "布宜諾斯艾利斯", "SCL": "聖地牙哥"},
@@ -137,10 +138,6 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
     CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
     CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
-    
-    # 💡 專為阿聯酋建立的規則
-    EK_PRIMARY = {"EK"}
-    EK_INTERLINE = {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
     async with sem:
         for _ in range(2):
@@ -164,9 +161,6 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                                         primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
                                         if op in primaries or mk in primaries: has_primary = True
                                         elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
-                                    elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
-                                        if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
-                                        elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
                                 
                                 if airline_mode != "🌍 無限制航空公司":
                                     if not has_primary or not all_legs_valid:
@@ -205,8 +199,6 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
     CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
     CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
-    EK_PRIMARY = {"EK"}
-    EK_INTERLINE = {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
     async with sem:
         for _ in range(2):
@@ -240,10 +232,6 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                                     else:
                                         if seg_idx in [0, 3] and not alliance_flag: all_legs_valid = False
                                         elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
-                                        
-                                elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
-                                    if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
-                                    elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
                                 
                                 seg_flights.append(f"{mk or op}{f.get('flightNumber', '')}")
                             
@@ -432,10 +420,8 @@ else:
         
     with col_right:
         st.subheader("⚙️ 偏好設定")
-        # 💡 加入 FIRST (頭等艙) 選項
-        cab = st.selectbox("艙等", ["FIRST", "BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"], index=1)
-        # 💡 加入阿聯酋航空選項
-        airline_filter = st.selectbox("✈️ 航空公司過濾", ["🌸 華航限定 (直營/聯營)", "🌳 長榮限定 (直營/聯營)", "🇦🇪 阿聯酋航空限定 (Emirates)", "🌍 無限制航空公司"], index=0)
+        cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
+        airline_filter = st.selectbox("✈️ 航空公司過濾", ["🌸 華航限定 (直營/聯營)", "🌳 長榮限定 (直營/聯營)", "🌍 無限制航空公司"], index=0)
         
         alliance_inc = False
         if "華航" in airline_filter:
@@ -523,6 +509,7 @@ else:
             d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
             d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
             
+            # 💡 新增：使用者可控範圍拉桿，保護 API 額度
             search_range = st.slider("📅 前後掃描範圍 (天數)：", min_value=7, max_value=90, value=30, step=1, 
                                      help="數值越大，產生的 API 費用越高，掃描時間也越長。請謹慎選擇。")
 
@@ -539,6 +526,7 @@ else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
                     h1_fix, h4_fix = d1_loc.split(" ")[0], d4_loc.split(" ")[0]
                     
+                    # 💡 依照拉桿數值動態推算日期
                     d1_dates = [d2_date - timedelta(days=i) for i in range(search_range, 0, -1)]
                     d4_dates = [d3_date + timedelta(days=i) for i in range(1, search_range + 1)]
                     
