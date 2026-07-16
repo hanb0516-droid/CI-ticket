@@ -24,7 +24,7 @@ else:
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v57.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v58.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db', isolation_level=None)
@@ -82,8 +82,11 @@ def safe_idx(target):
         if s.startswith(target): return i
     return 0
 
+def get_full_name(code):
+    return f"{code} {AIRPORT_MAP.get(code, '')}".strip()
+
 # ==========================================
-# 2. 核心搜尋與 DataFrame 轉換 (保留 v55.0 經典版面)
+# 2. 核心搜尋與 DataFrame 轉換
 # ==========================================
 def create_dataframe(res):
     if not res: return pd.DataFrame()
@@ -187,7 +190,6 @@ async def fetch_lowest_price(client, sem, f_code, t_code, date_str, cab):
             except: pass
     return None
 
-# 💡 V57.0：精準血統淨化器 (D1/D4 嚴格，D2/D3 彈性連程)
 async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, alliance_flag):
     url_rt = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlights"
     params_rt = {"fromId": legs[0]['fromId'], "toId": legs[0]['toId'], "departDate": legs[0]['date'], "returnDate": legs[1]['date'], "adults": "1", "cabinClass": cab, "currency_code": "TWD"}
@@ -218,19 +220,15 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                                     has_primary, all_legs_valid = False, True
                                     for leg in seg.get('legs', []):
                                         op, mk = leg.get('flightInfo', {}).get('carrierInfo', {}).get('operatingCarrier', ''), leg.get('flightInfo', {}).get('carrierInfo', {}).get('marketingCarrier', '')
-                                        
                                         if airline_mode == "🌸 華航限定 (直營/聯營)":
-                                            primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
-                                            if op in primaries or mk in primaries: has_primary = True
-                                            if op not in primaries and mk not in primaries and op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
+                                            if op in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY) or mk in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY): has_primary = True
+                                            elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
                                         elif airline_mode == "🌳 長榮限定 (直營/聯營)":
-                                            primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
-                                            if op in primaries or mk in primaries: has_primary = True
-                                            if op not in primaries and mk not in primaries and op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                            if op in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY) or mk in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY): has_primary = True
+                                            elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
                                         elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
                                             if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
-                                            if op not in EK_PRIMARY and mk not in EK_PRIMARY and op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
-                                            
+                                            elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
                                     if airline_mode != "🌍 無限制航空公司":
                                         if not has_primary or not all_legs_valid: is_valid_airline = False; break
                                 if is_valid_airline: valid.append({"total": o.get('priceBreakdown', {}).get('total', {}).get('units', 0)})
@@ -295,13 +293,13 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                                     mk = f.get('carrierInfo', {}).get('marketingCarrier', '')
                                     flight_num = f.get('flightNumber', '')
                                     
-                                    # 💡 V57.0 完美漏斗過濾：D1/D4 絕對純血，D2/D3 彈性聯程
+                                    # 💡 V57.1/V58.0：D1/D4 絕對純血，D2/D3 彈性聯程防鬼影
                                     if airline_mode == "🌸 華航限定 (直營/聯營)":
                                         primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
                                         if op in primaries or mk in primaries: has_primary = True
                                         if seg_idx in [0, 3]: # D1 & D4: 嚴格拒絕聯營外家
                                             if op not in primaries and mk not in primaries: all_legs_valid = False
-                                        else: # D2 & D3: 允許合法聯營 (阻絕 BA692 鬼影)
+                                        else: # D2 & D3: 允許合法聯營 
                                             if op not in primaries and mk not in primaries and op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
                                             
                                     elif airline_mode == "🌳 長榮限定 (直營/聯營)":
@@ -619,18 +617,35 @@ else:
     if task_mode:
         st.divider()
         
+        # 💡 V58.0: 完美加回「多點進出」的核心行程彈性選擇
         st.subheader("Step 2: 填寫核心旅程")
-        c1, c2 = st.columns(2)
-        d2_loc = c1.selectbox("✈️ 從台灣出發地", ALL_CITIES_LIST, index=safe_idx("TPE"))
-        d2_date = c1.date_input("📅 出發日期", value=date(2027, 2, 10))
-        d3_loc = c2.selectbox("✈️ 主要目的地", ALL_CITIES_LIST, index=safe_idx("CPH"))
-        d3_date = c2.date_input("📅 回程日期", value=date(2027, 2, 25))
+        trip_type = st.radio("✈️ 核心行程類型", ["來回 (Round Trip)", "多點進出/不同點進出 (Multi-city)"], horizontal=True)
         
+        if "來回" in trip_type:
+            c1, c2 = st.columns(2)
+            d2_loc = c1.selectbox("✈️ 從台灣出發地", ALL_CITIES_LIST, index=safe_idx("TPE"))
+            d2_date = c1.date_input("📅 出發日期", value=date(2027, 2, 10))
+            d3_loc = c2.selectbox("✈️ 主要目的地", ALL_CITIES_LIST, index=safe_idx("CPH"))
+            d3_date = c2.date_input("📅 回程日期", value=date(2027, 2, 25))
+            
+            d2o_fix, d2d_fix = d2_loc.split(" ")[0], d3_loc.split(" ")[0]
+            d3o_fix, d3d_fix = d3_loc.split(" ")[0], d2_loc.split(" ")[0]
+        else:
+            c1, c2 = st.columns(2)
+            d2o_loc = c1.selectbox("✈️ D2 出發地", ALL_CITIES_LIST, index=safe_idx("TPE"))
+            d2_date = c1.date_input("📅 D2 出發日期", value=date(2027, 2, 10))
+            d2d_loc = c2.selectbox("✈️ D2 目的地", ALL_CITIES_LIST, index=safe_idx("FRA"))
+            
+            c3, c4 = st.columns(2)
+            d3o_loc = c3.selectbox("✈️ D3 回程地", ALL_CITIES_LIST, index=safe_idx("CPH"))
+            d3_date = c3.date_input("📅 D3 回程日期", value=date(2027, 2, 25))
+            d3d_loc = c4.selectbox("✈️ D3 返回地", ALL_CITIES_LIST, index=safe_idx("TPE"))
+            
+            d2o_fix, d2d_fix = d2o_loc.split(" ")[0], d2d_loc.split(" ")[0]
+            d3o_fix, d3d_fix = d3o_loc.split(" ")[0], d3d_loc.split(" ")[0]
+            
         st.info("💡 系統會自動連線取得主行程市價作為比較基準。如果您已經在航空公司官網查過價格，可以直接輸入，精算結果會更準確！")
         manual_core_price = st.number_input("💰 官網主行程機票總價 (選填，可讓省錢計算更精準)", value=0, step=1000)
-        
-        d2o_fix, d2d_fix = d2_loc.split(" ")[0], d3_loc.split(" ")[0]
-        d3o_fix, d3d_fix = d3_loc.split(" ")[0], d2_loc.split(" ")[0]
         
         l_bbb = [{"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
                  {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")}]
@@ -678,10 +693,11 @@ else:
             st.divider()
             st.subheader("Step 3: 填寫外站旅程與探索範圍")
             cc1, cc2 = st.columns(2)
-            d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
-            d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
+            # 💡 V58.0: 聰明語意提示，接駁段對話更加精準
+            d1_loc = cc1.selectbox(f"D1 想要從哪裡飛往 {d2o_fix}？", ALL_CITIES_LIST, index=safe_idx("NRT"))
+            d4_loc = cc2.selectbox(f"D4 抵達 {d3d_fix} 後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
             
-            st.info("💡 請設定 D1 (外站回台) 與 D4 (外站離台) 的日期搜尋範圍：")
+            st.info("💡 請設定 D1 (外站回程) 與 D4 (外站離去) 的日期搜尋範圍：")
             col_d1, col_d4 = st.columns(2)
             d1_range = col_d1.date_input("📅 D1 日期範圍", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date)
             d4_range = col_d4.date_input("📅 D4 日期範圍", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, help="💡 系統框架原生僅提供『過去(Past)』快捷鍵。請直接點擊日曆上的『起始日』與『結束日』來圈選未來範圍！")
@@ -794,8 +810,8 @@ else:
                     st.markdown(f"<h3 style='color: #ff5252;'>🚀 Step 5: 尋找 {sel_route_pure} 更便宜的時間</h3>", unsafe_allow_html=True)
                     
                     col_d1, col_d4 = st.columns(2)
-                    d1_range_s5 = col_d1.date_input("📅 D1 日期範圍 (外站回台)", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date, key="d1_step5")
-                    d4_range_s5 = col_d4.date_input("📅 D4 日期範圍 (外站離台)", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, key="d4_step5", help="💡 系統框架原生僅提供『過去(Past)』快捷鍵。請直接點擊日曆上的『起始日』與『結束日』來圈選未來範圍！")
+                    d1_range_s5 = col_d1.date_input("📅 D1 日期範圍", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date, key="d1_step5")
+                    d4_range_s5 = col_d4.date_input("📅 D4 日期範圍", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, key="d4_step5", help="💡 系統框架原生僅提供『過去(Past)』快捷鍵。請直接點擊日曆上的『起始日』與『結束日』來圈選未來範圍！")
                     
                     if len(d1_range_s5) == 2 and len(d4_range_s5) == 2:
                         total_est_tasks_s5 = ((d1_range_s5[1] - d1_range_s5[0]).days + 1) * ((d4_range_s5[1] - d4_range_s5[0]).days + 1)
