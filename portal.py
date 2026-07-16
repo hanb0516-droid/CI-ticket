@@ -16,7 +16,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v48.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v48.1 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
@@ -34,7 +34,6 @@ if "run_id" not in st.session_state: st.session_state.run_id = None
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 if "report_data" not in st.session_state: st.session_state.report_data = None
 if "report_ref" not in st.session_state: st.session_state.report_ref = 0
-# 💡 V48.0 新增：專屬保存 Step 5 深潛結果的記憶體
 if "deep_report_data" not in st.session_state: st.session_state.deep_report_data = None
 if "deep_report_ref" not in st.session_state: st.session_state.deep_report_ref = 0
 
@@ -311,7 +310,6 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
             except Exception: await asyncio.sleep(1.0)
         return None
 
-# 💡 V48.0 修改：加入 state_key 參數，讓主搜尋與深潛搜尋可以儲存到不同的記憶體區塊
 async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, alliance_flag, manual_core_price, state_key="report_data"):
     total_tasks = len(tasks)
     bar, status, live_table = st.progress(0), st.empty(), st.empty()
@@ -384,7 +382,6 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
         if ok: st.success("✅ 獵殺完成！報告已發送至您的信箱。")
         else: st.error("🚨 信件發送失敗，請聯絡站長。")
         
-        # 💡 將結果儲存到對應的 session state 裡
         st.session_state[state_key] = final_res
         st.session_state[state_key + "_ref"] = core_ref
         live_table.empty()
@@ -572,14 +569,13 @@ else:
             
             if st.button("🚀 開始自動精算並寄信", type="primary"):
                 st.session_state.report_data = None 
-                st.session_state.deep_report_data = None # 一併清空深潛報表
+                st.session_state.deep_report_data = None 
                 if not target_locs:
                     st.error("🚨 請至少選擇一個外站掃描機場！")
                 elif not email_input: 
                     st.error("🚨 請輸入 Email！")
                 else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
-                    
                     target_codes = [loc.split(" ")[0] for loc in target_locs]
                         
                     tasks = []
@@ -602,8 +598,7 @@ else:
             d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
             d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
             
-            # 💡 V48.0 修改：Option 2 固定採用 200 天大數據深度探索邏輯
-            st.warning("⚠️ 系統將以您設定的核心日期為基準，自動掃描 **D2 出發前 200 天**、與 **D3 回程後 200 天**，為您找出這個 40,000 種組合範圍內最便宜的破盤價！")
+            st.warning("⚠️ 系統將以您設定的核心日期為基準，自動掃描 **D2 出發前 200 天**、與 **D3 回程後 200 天**，為您找出這 40,000 種組合範圍內最便宜的破盤價！")
             
             st.divider()
             st.subheader("Step 4: 確認與執行")
@@ -658,8 +653,8 @@ else:
             # ==========================================
             if task_mode.startswith("1"):
                 st.divider()
-                st.markdown("<h3 style='color: #ff5252;'>🚀 Step 5: 尋找該外站最便宜的時間 (200天深度探索)</h3>", unsafe_allow_html=True)
-                st.info("💡 系統已為您萃取上方報表中出現過的潛力航線組合。請在下方下拉選單中挑選一組，我們將發動 40,000 筆大數據運算，找出這組航線在前後 200 天內最便宜的破盤組合！")
+                st.markdown("<h3 style='color: #ff5252;'>🚀 Step 5: 鎖定潛力航線，進行 200 天深度探索</h3>", unsafe_allow_html=True)
+                st.info("💡 由於系統架構限制，我們無法直接在上方表格內打勾。請直接在下方選單點選您感興趣的「潛力航線」，然後按下深潛按鈕，系統將為您掃描該航線 40,000 種時間組合的最底價！")
                 
                 # 自動萃取報表中不重複的 H1 ➔ H4 組合
                 unique_routes = []
@@ -670,10 +665,11 @@ else:
                         seen.add(pair)
                         unique_routes.append(r)
                     if len(unique_routes) >= 20: break # 最多顯示前 20 種航線
-                        
-                route_options = {f"出發地: {r['h1']} ➔ 目的地: {r['h4']} (剛剛查得最低 {r['total']:,} TWD)": (r['h1'], r['h4']) for r in unique_routes}
                 
-                sel_route_str = st.selectbox("🎯 選擇一組潛力外站航線：", list(route_options.keys()))
+                # 建立單選選單，模擬勾選效果
+                route_options = {f"📍 路線：{r['h1']} ➔ {r['h4']} (此組合目前最低 {r['total']:,} TWD)": (r['h1'], r['h4']) for r in unique_routes}
+                
+                sel_route_str = st.radio("👇 請勾選一組要深潛的航線：", list(route_options.keys()))
                 sel_h1, sel_h4 = route_options[sel_route_str]
                 
                 if st.button(f"🔥 立即啟動 {sel_h1} / {sel_h4} 深度探索", type="primary"):
