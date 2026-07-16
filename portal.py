@@ -16,7 +16,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v51.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v51.1 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
@@ -579,11 +579,11 @@ else:
             d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
             d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
             
-            # 💡 V51.0：加入雙日期區間選擇器
             st.info("💡 請設定 D1 (外站回台) 與 D4 (外站離台) 的日期搜尋範圍：")
             col_d1, col_d4 = st.columns(2)
             d1_range = col_d1.date_input("📅 D1 日期範圍", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date)
-            d4_range = col_d4.date_input("📅 D4 日期範圍", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date)
+            # 💡 V51.1 加上專屬提示
+            d4_range = col_d4.date_input("📅 D4 日期範圍", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, help="💡 系統框架原生僅提供『過去(Past)』快捷鍵。請直接點擊日曆上的『起始日』與『結束日』來圈選未來範圍！")
             
             st.divider()
             st.subheader("Step 4: 確認與執行")
@@ -672,11 +672,11 @@ else:
                     st.divider()
                     st.markdown(f"<h3 style='color: #ff5252;'>🚀 Step 5: 尋找 {sel_route_pure} 更便宜的時間</h3>", unsafe_allow_html=True)
                     
-                    # 💡 V51.0：Step 5 雙日期區間選擇器
                     st.info("💡 請自訂深潛探索的日期範圍 (系統將為您算出範圍內所有組合的破盤價)：")
                     col_d1, col_d4 = st.columns(2)
                     d1_range_s5 = col_d1.date_input("📅 D1 日期範圍 (外站回台)", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date, key="d1_step5")
-                    d4_range_s5 = col_d4.date_input("📅 D4 日期範圍 (外站離台)", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, key="d4_step5")
+                    # 💡 V51.1 加上專屬提示
+                    d4_range_s5 = col_d4.date_input("📅 D4 日期範圍 (外站離台)", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, key="d4_step5", help="💡 系統框架原生僅提供『過去(Past)』快捷鍵。請直接點擊日曆上的『起始日』與『結束日』來圈選未來範圍！")
                     
                     if len(d1_range_s5) == 2 and len(d4_range_s5) == 2:
                         total_est_tasks_s5 = ((d1_range_s5[1] - d1_range_s5[0]).days + 1) * ((d4_range_s5[1] - d4_range_s5[0]).days + 1)
