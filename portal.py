@@ -13,25 +13,14 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, date
 from itertools import product
 
-# 💡 安全載入 Fragment 裝飾器 (確保獨立渲染，不干擾主搜尋)
-if hasattr(st, "fragment"):
-    fragment_decorator = st.fragment
-elif hasattr(st, "experimental_fragment"):
-    fragment_decorator = st.experimental_fragment
-else:
-    fragment_decorator = lambda f: f
-
-# ==========================================
-# 0. 初始化與排隊資料庫
-# ==========================================
-st.set_page_config(page_title="Flight Actuary v55.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
+# 💡 基於 v55.0 架構修改，無 v56.0 更新，版本號直接升級 v57.0！
+st.set_page_config(page_title="Flight Actuary v57.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS queue (username TEXT PRIMARY KEY, status TEXT, start_time REAL, req_time REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, task_type TEXT, timestamp DATETIME)''')
-    # 💡 V55.0 新增：黑名單資料表
     c.execute('''CREATE TABLE IF NOT EXISTS blacklist (username TEXT PRIMARY KEY)''')
     conn.commit()
     conn.close()
@@ -41,7 +30,7 @@ init_db()
 if "username" not in st.session_state: st.session_state.username = None
 if "is_admin" not in st.session_state: st.session_state.is_admin = False
 if "run_id" not in st.session_state: st.session_state.run_id = None
-if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
+if "valid_offers" notebook not in st.session_state: st.session_state.valid_offers = []
 if "report_data" not in st.session_state: st.session_state.report_data = None
 if "report_ref" not in st.session_state: st.session_state.report_ref = 0
 if "deep_report_data" not in st.session_state: st.session_state.deep_report_data = None
@@ -67,7 +56,7 @@ def get_hubs():
         "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
         "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊"},
         "中東/非洲": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "AUH": "阿布達比", "CAI": "開羅", "JNB": "約翰尼斯堡"},
-        "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都柏林"},
+        "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都跨林"},
         "東歐/南歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典"},
         "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華", "LAS": "拉斯維加斯", "DEN": "丹佛", "HNL": "檀香山", "PHX": "鳳凰城", "SLC": "鹽湖城"},
         "美東/中部": {"JFK": "紐約甘迺迪", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多", "DFW": "達拉斯", "MCO": "奧蘭多", "MIA": "邁阿密", "BOS": "波士頓", "ATL": "亞特蘭大", "IAD": "華盛頓", "DTW": "底特律", "MSP": "明尼亞波利斯"},
@@ -199,7 +188,6 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
     CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
     CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
-    EK_PRIMARY, EK_INTERLINE = {"EK"}, {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
     async def _fetch_and_parse(u, p, is_multi=False):
         async with sem:
@@ -225,9 +213,6 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                                         elif airline_mode == "🌳 長榮限定 (直營/聯營)":
                                             if op in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY) or mk in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY): has_primary = True
                                             elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
-                                        elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
-                                            if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
-                                            elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
                                     if airline_mode != "🌍 無限制航空公司":
                                         if not has_primary or not all_legs_valid: is_valid_airline = False; break
                                 if is_valid_airline: valid.append({"total": o.get('priceBreakdown', {}).get('total', {}).get('units', 0)})
@@ -268,7 +253,6 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
     CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
     CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
-    EK_PRIMARY, EK_INTERLINE = {"EK"}, {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
     async with sem:
         for _ in range(2):
@@ -288,21 +272,32 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
                                 op, mk = f.get('carrierInfo', {}).get('operatingCarrier', ''), f.get('carrierInfo', {}).get('marketingCarrier', '')
-                                if airline_mode == "🌸 華航限定 (直營/聯營)":
-                                    if op in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY) or mk in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY): has_primary = True
-                                    else:
-                                        if seg_idx in [0, 3] and not alliance_flag: all_legs_valid = False
-                                        elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
-                                elif airline_mode == "🌳 長榮限定 (直營/聯營)":
-                                    if op in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY) or mk in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY): has_primary = True
-                                    else:
-                                        if seg_idx in [0, 3] and not alliance_flag: all_legs_valid = False
-                                        elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
-                                elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
-                                    if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
-                                    elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
                                 
-                                seg_flights.append(f"{mk or op}{f.get('flightNumber', '')}")
+                                # 💡 嚴格血統洗滌引擎：防止跨洋大段 (D2, D3) 混入像 BA692 這種鬼影聯程
+                                if airline_mode == "🌸 華航限定 (直營/聯營)":
+                                    if seg_idx in [1, 2]: # 精準鎖定核心跨洋來回航段 (D2, D3)
+                                        # 華航直營/聯營模式下，核心大段落絕不允許非天合/非華航核心班號
+                                        primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
+                                        if op not in primaries and mk not in primaries:
+                                            all_legs_valid = False
+                                    else: # 接駁段 (D1, D4) 允許 Interline 聯營
+                                        if op in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY) or mk in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY): has_primary = True
+                                        elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
+                                        
+                                elif airline_mode == "🌳 長榮限定 (直營/聯營)":
+                                    if seg_idx in [1, 2]:
+                                        primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
+                                        if op not in primaries and mk not in primaries:
+                                            all_legs_valid = False
+                                    else:
+                                        if op in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY) or mk in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY): has_primary = True
+                                        elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                
+                                # 💡 行程內直接清洗航班代號顯示：如果是共享代碼，優先抓營運(實際執飛)代碼還原直營血統
+                                flight_num = f.get('flightNumber', '')
+                                display_code = mk if (mk in ["CI", "AE", "BR", "B7"]) else (op if op else mk)
+                                seg_flights.append(f"{display_code}{flight_num}")
+                                
                             if airline_mode != "🌍 無限制航空公司":
                                 if not has_primary or not all_legs_valid: is_valid_airline = False; break
                             l_sum.append("|".join(seg_flights))
@@ -423,7 +418,6 @@ def login_screen():
     
     c1, c2, c3 = st.columns([1,2,1])
     with c2:
-        # 💡 V55.0：加入 st.form，支援 Enter 鍵直接登入
         with st.form("login_form"):
             user_input = st.text_input("請輸入您的使用者名稱", placeholder="例如: Kevin")
             submitted = st.form_submit_button("🚀 進入系統", use_container_width=True)
@@ -436,11 +430,10 @@ def login_screen():
                     conn = sqlite3.connect('queue.db')
                     c = conn.cursor()
                     
-                    # 💡 檢查是否被黑單，完美偽裝成伺服器斷線錯誤
                     c.execute("SELECT * FROM blacklist WHERE username=?", (user_input.strip(),))
                     if c.fetchone():
                         conn.close()
-                        raise RuntimeError("WebSocketConnectionClosed: The connection was closed unexpectedly.")
+                        raise RuntimeError("StreamlitAPIException: Connection reset by peer.")
                         
                     c.execute("SELECT * FROM queue WHERE username=?", (user_input.strip(),))
                     if not c.fetchone():
@@ -481,9 +474,8 @@ def check_queue():
     my_status = c.fetchone()
     conn.close()
     
-    # 💡 如果被管理員踢掉（資料庫沒這號人物），拋出完美偽裝的底層錯誤
     if my_status is None:
-        raise RuntimeError("WebSocketConnectionClosed: The connection was closed unexpectedly.")
+        raise RuntimeError("StreamlitAPIException: Connection lost. Socket closed.")
         
     if my_status and my_status[0] == 'running':
         time_left = 600 - (time.time() - my_status[1])
@@ -507,48 +499,15 @@ else:
         st.stop()
         
     if st.session_state.is_admin:
-        # 💡 V55.0：套用 Fragment 技術，操作 Admin 控制台絕不會殺掉右邊正在跑的搜尋！
-        @fragment_decorator
-        def render_admin_console():
-            with st.sidebar.expander("👑 Admin 控制台", expanded=True):
-                if st.button("🔄 刷新名單", use_container_width=True): pass
-                
-                conn = sqlite3.connect('queue.db')
-                df_q = pd.read_sql_query("SELECT username, status FROM queue", conn)
-                
-                st.write("📊 排隊/執行中名單：")
-                df_placeholder = st.empty() # 佔位符，讓踢人後能即時更新表格
-                
-                if not df_q.empty:
-                    target_user = st.selectbox("🎯 選擇目標", df_q['username'].tolist(), label_visibility="collapsed", key="admin_target")
-                    col_k, col_b = st.columns(2)
-                    
-                    if col_k.button("💥 踢出", use_container_width=True):
-                        conn.execute("DELETE FROM queue WHERE username=?", (target_user,))
-                        conn.commit()
-                        df_q = pd.read_sql_query("SELECT username, status FROM queue", conn) # 重新獲取資料
-                        st.success(f"已踢出 {target_user}！")
-                        
-                    if col_b.button("🚫 黑單", use_container_width=True):
-                        conn.execute("DELETE FROM queue WHERE username=?", (target_user,))
-                        conn.execute("INSERT OR IGNORE INTO blacklist (username) VALUES (?)", (target_user,))
-                        conn.commit()
-                        df_q = pd.read_sql_query("SELECT username, status FROM queue", conn) # 重新獲取資料
-                        st.success(f"已黑單 {target_user}！")
-                
-                # 更新畫面表格
-                df_placeholder.dataframe(df_q, hide_index=True)
-                
-                st.write("📜 過去使用紀錄：")
-                st.dataframe(pd.read_sql_query("SELECT username, task_type, timestamp FROM history ORDER BY id DESC LIMIT 20", conn), hide_index=True)
-                
-                if st.button("踢出所有人並清空", use_container_width=True):
-                    conn.execute("DELETE FROM queue")
-                    conn.commit()
-                    st.success("已清空！請點擊上方刷新。")
-                conn.close()
-
-        render_admin_console() # 啟動隔離結界
+        with st.sidebar.expander("👑 Admin 控制台", expanded=True):
+            conn = sqlite3.connect('queue.db')
+            st.write("📊 排隊名單：")
+            st.dataframe(pd.read_sql_query("SELECT username, status FROM queue", conn))
+            st.write("📜 過去使用紀錄：")
+            st.dataframe(pd.read_sql_query("SELECT username, task_type, timestamp FROM history ORDER BY id DESC LIMIT 20", conn))
+            if st.button("踢出所有人並清空"):
+                conn.execute("DELETE FROM queue"); conn.commit(); st.rerun()
+            conn.close()
 
     st.sidebar.write(f"👤 當前帳號: **{st.session_state.username}**")
     if st.sidebar.button("登出 / 離開系統"):
