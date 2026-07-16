@@ -16,13 +16,15 @@ from itertools import product
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v52.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v55.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS queue (username TEXT PRIMARY KEY, status TEXT, start_time REAL, req_time REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, task_type TEXT, timestamp DATETIME)''')
+    # 💡 V55.0 新增：黑名單資料表
+    c.execute('''CREATE TABLE IF NOT EXISTS blacklist (username TEXT PRIMARY KEY)''')
     conn.commit()
     conn.close()
 
@@ -36,7 +38,6 @@ if "report_data" not in st.session_state: st.session_state.report_data = None
 if "report_ref" not in st.session_state: st.session_state.report_ref = 0
 if "deep_report_data" not in st.session_state: st.session_state.deep_report_data = None
 if "deep_report_ref" not in st.session_state: st.session_state.deep_report_ref = 0
-# 💡 V52.0 新增：用來觸發「消除殘影」的快取狀態
 if "search_params" not in st.session_state: st.session_state.search_params = None
 
 try:
@@ -81,7 +82,6 @@ def get_full_name(code):
 # ==========================================
 # 2. 核心搜尋與 DataFrame 轉換
 # ==========================================
-# 💡 V52.0 修改：支援全中英文對照與新版欄位順序
 def create_dataframe(res):
     if not res: return pd.DataFrame()
     df_data = []
@@ -90,31 +90,28 @@ def create_dataframe(res):
         diff_str = f"🟢 省 {int(diff):,}" if diff >= 0 else f"🔴 貴 {abs(int(diff)):,}"
         
         d1_short = r['d1'][5:].replace('-','/')
-        d2_short = r['d2'][5:].replace('-','/')
-        d3_short = r['d3'][5:].replace('-','/')
         d4_short = r['d4'][5:].replace('-','/')
         
-        h1_f = get_full_name(r['h1'])
-        d2o_f = get_full_name(r['d2o'])
-        d2d_f = get_full_name(r['d2d'])
-        d3o_f = get_full_name(r['d3o'])
-        d3d_f = get_full_name(r['d3d'])
-        h4_f = get_full_name(r['h4'])
-
-        d1_str = f"({d1_short}) {h1_f} ➔ {d2o_f}"
-        d23_str = f"({d2_short}) {d2o_f} ➔ {d2d_f} | ({d3_short}) {d3o_f} ➔ {d3d_f}"
-        d4_str = f"({d4_short}) {d3d_f} ➔ {h4_f}"
-        route_pure = f"{h1_f} ➔ {d2o_f} ➔ {d2d_f} ➔ {d3d_f} ➔ {h4_f}"
+        h1_name = f"{r['h1']} {AIRPORT_MAP.get(r['h1'],'')}"
+        h4_name = f"{r['h4']} {AIRPORT_MAP.get(r['h4'],'')}"
+        
+        d1_col = f"{h1_name} ({d1_short})"
+        d4_col = f"{h4_name} ({d4_short})"
+        route_str = f"{r['h1']} ➔ {r['d2o']} 【 {r['d2o']} ➔ {r['d2d']} | {r['d3o']} ➔ {r['d3d']} 】 {r['d3d']} ➔ {r['h4']}"
+        route_pure = f"{r['h1']} ➔ {r['d2o']} ➔ {r['d2d']} ➔ {r['d3d']} ➔ {r['h4']}"
 
         df_data.append({
             "勾選": False,
             "總價(TWD)": f"💰 {r['total']:,}",
             "分開買市價": f"{int(r['ref_price']):,}",
             "價差對比": diff_str,
-            "D1 外站回台": d1_str,
-            "D4 外站離台": d4_str,
-            "D2/D3 核心旅程": d23_str,
-            "航班組合": " | ".join(r['legs']),
+            "D1 站點/日期": d1_col,
+            "D4 站點/日期": d4_col,
+            "探索路線": route_str,
+            "D1 航班": r['legs'][0] if len(r['legs']) > 0 else "",
+            "D2 航班": r['legs'][1] if len(r['legs']) > 1 else "",
+            "D3 航班": r['legs'][2] if len(r['legs']) > 2 else "",
+            "D4 航班": r['legs'][3] if len(r['legs']) > 3 else "",
             "_h1": r['h1'],
             "_h4": r['h4'],
             "_route_pure": route_pure
@@ -122,38 +119,32 @@ def create_dataframe(res):
     return pd.DataFrame(df_data)
 
 def generate_table_html(res, core_ref):
-    header = "<tr style='background:#333;color:#fff;font-size:16px;'><th>總價(TWD)</th><th>分開買市價</th><th>價差對比</th><th>D1 外站回台</th><th>D4 外站離台</th><th>D2/D3 核心旅程</th><th>航班組合</th></tr>"
+    header = "<tr style='background:#333;color:#fff;font-size:14px;'><th>總價(TWD)</th><th>分開買市價</th><th>價差對比</th><th>D1 站點/日期</th><th>D4 站點/日期</th><th>探索路線</th><th>D1 航班</th><th>D2 航班</th><th>D3 航班</th><th>D4 航班</th></tr>"
     rows = []
     for r in res[:100]:
         diff = r['diff']
         color = "#00e676" if diff >= 0 else "#ff5252"
-        diff_str = f"<span style='color:{color}; font-size:16px;'><b>{'省' if diff>=0 else '貴'} {abs(diff):,}</b></span>"
+        diff_str = f"<span style='color:{color}; font-size:14px;'><b>{'省' if diff>=0 else '貴'} {abs(diff):,}</b></span>"
         
         d1_short = r['d1'][5:].replace('-','/')
-        d2_short = r['d2'][5:].replace('-','/')
-        d3_short = r['d3'][5:].replace('-','/')
         d4_short = r['d4'][5:].replace('-','/')
         
-        h1_f = get_full_name(r['h1'])
-        d2o_f = get_full_name(r['d2o'])
-        d2d_f = get_full_name(r['d2d'])
-        d3o_f = get_full_name(r['d3o'])
-        d3d_f = get_full_name(r['d3d'])
-        h4_f = get_full_name(r['h4'])
-
-        d1_str = f"({d1_short}) {h1_f} ➔ {d2o_f}"
-        d23_str = f"({d2_short}) {d2o_f} ➔ {d2d_f}<br>({d3_short}) {d3o_f} ➔ {d3d_f}"
-        d4_str = f"({d4_short}) {d3d_f} ➔ {h4_f}"
+        d1_col = f"<b>{r['h1']} {AIRPORT_MAP.get(r['h1'],'')}</b><br>({d1_short})"
+        d4_col = f"<b>{r['h4']} {AIRPORT_MAP.get(r['h4'],'')}</b><br>({d4_short})"
+        route_str = f"<b>{r['h1']}</b> ➔ {r['d2o']} 【 {r['d2o']} ➔ {r['d2d']} | {r['d3o']} ➔ {r['d3d']} 】 {r['d3d']} ➔ <b>{r['h4']}</b>"
         
-        f_str = f"<span style='color:#666; font-size:12px;'>{r['legs'][0]}<br>{r['legs'][1]}<br>{r['legs'][2]}<br>{r['legs'][3]}</span>"
+        f1 = f"<span style='color:#666; font-size:12px;'>{r['legs'][0]}</span>" if len(r['legs']) > 0 else ""
+        f2 = f"<span style='color:#666; font-size:12px;'>{r['legs'][1]}</span>" if len(r['legs']) > 1 else ""
+        f3 = f"<span style='color:#666; font-size:12px;'>{r['legs'][2]}</span>" if len(r['legs']) > 2 else ""
+        f4 = f"<span style='color:#666; font-size:12px;'>{r['legs'][3]}</span>" if len(r['legs']) > 3 else ""
         
-        row_html = f"<tr><td><b style='font-size:16px;'>{r['total']:,}</b></td>"
-        row_html += f"<td style='font-size:14px;color:#888;'>{int(r['ref_price']):,}</td>"
+        row_html = f"<tr><td><b style='font-size:14px;'>{r['total']:,}</b></td>"
+        row_html += f"<td style='font-size:13px;color:#888;'>{int(r['ref_price']):,}</td>"
         row_html += f"<td>{diff_str}</td>"
-        row_html += f"<td style='font-size:14px;'>{d1_str}</td>"
-        row_html += f"<td style='font-size:14px;'>{d4_str}</td>"
-        row_html += f"<td style='font-size:14px;'>{d23_str}</td>"
-        row_html += f"<td>{f_str}</td></tr>"
+        row_html += f"<td style='font-size:13px;'>{d1_col}</td>"
+        row_html += f"<td style='font-size:13px;'>{d4_col}</td>"
+        row_html += f"<td style='font-size:13px;'>{route_str}</td>"
+        row_html += f"<td>{f1}</td><td>{f2}</td><td>{f3}</td><td>{f4}</td></tr>"
         rows.append(row_html)
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;'><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
 
@@ -355,7 +346,6 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
         status.info(f"🎯 正在建立「真實對比基準」：額外計算 {len(unique_d1)+len(unique_d4)} 組外站單買市價...")
         await asyncio.gather(*coros_d)
         
-        # 💡 V52.0：加上基於 15 RPS 的保守 ETA 預估
         est_seconds = int(total_tasks / 15)
         eta_text = f"約 {est_seconds} 秒" if est_seconds < 60 else f"約 {int(est_seconds//60)} 分 {int(est_seconds%60)} 秒"
         status.info(f"🎯 基準建立完畢！正式展開雷達比價 (共 {total_tasks:,} 筆組合，預計{eta_text})...")
@@ -387,15 +377,18 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
                     temp_df = create_dataframe(temp_sorted)
                     live_table.dataframe(
                         temp_df.drop(columns=["勾選", "_h1", "_h4", "_route_pure"]),
-                        column_order=["總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D4 外站離台", "D2/D3 核心旅程", "航班組合"],
+                        column_order=["總價(TWD)", "分開買市價", "價差對比", "D1 站點/日期", "D4 站點/日期", "探索路線", "D1 航班", "D2 航班", "D3 航班", "D4 航班"],
                         column_config={
                             "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
                             "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
                             "價差對比": st.column_config.TextColumn("價差對比", width="small"),
-                            "D1 外站回台": st.column_config.TextColumn("D1 外站回台", width="medium"),
-                            "D4 外站離台": st.column_config.TextColumn("D4 外站離台", width="medium"),
-                            "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
-                            "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
+                            "D1 站點/日期": st.column_config.TextColumn("D1 站點/日期", width="medium"),
+                            "D4 站點/日期": st.column_config.TextColumn("D4 站點/日期", width="medium"),
+                            "探索路線": st.column_config.TextColumn("探索路線", width="large"),
+                            "D1 航班": st.column_config.TextColumn("D1 航班", width="small"),
+                            "D2 航班": st.column_config.TextColumn("D2 航班", width="small"),
+                            "D3 航班": st.column_config.TextColumn("D3 航班", width="small"),
+                            "D4 航班": st.column_config.TextColumn("D4 航班", width="small"),
                         },
                         hide_index=True,
                         use_container_width=True
@@ -419,31 +412,41 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
 # ==========================================
 # 3. 權限與排隊邏輯
 # ==========================================
+# 💡 V55.0：登入介面採用 st.form，支援 Enter 鍵直接送出
 def login_screen():
     st.markdown("<h1 style='text-align:center;'>✈️ Flight Actuary 外站機票精算系統</h1>", unsafe_allow_html=True)
     st.markdown("<h4 style='text-align:center; color:#888;'>不用懂複雜的航空代碼，告訴我們你要去哪裡，剩下的交給機器人！</h4><br>", unsafe_allow_html=True)
     
     c1, c2, c3 = st.columns([1,2,1])
     with c2:
-        user_input = st.text_input("請輸入您的使用者名稱", placeholder="例如: Kevin")
-        if st.button("🚀 進入系統", use_container_width=True):
-            if user_input.strip() == "scottiefor3":
-                st.session_state.username = "scottiefor3"
-                st.session_state.is_admin = True
-                st.rerun()
-            elif user_input.strip():
-                conn = sqlite3.connect('queue.db')
-                c = conn.cursor()
-                c.execute("SELECT * FROM queue WHERE username=?", (user_input,))
-                if not c.fetchone():
-                    c.execute("INSERT INTO queue (username, status, start_time, req_time) VALUES (?, 'waiting', 0, ?)", (user_input, time.time()))
-                    conn.commit()
-                conn.close()
-                st.session_state.username = user_input
-                st.session_state.is_admin = False
-                st.rerun()
-            else:
-                st.warning("請輸入名稱！")
+        with st.form("login_form"):
+            user_input = st.text_input("請輸入您的使用者名稱", placeholder="例如: Kevin")
+            submitted = st.form_submit_button("🚀 進入系統", use_container_width=True)
+            if submitted:
+                if user_input.strip() == "scottiefor3":
+                    st.session_state.username = "scottiefor3"
+                    st.session_state.is_admin = True
+                    st.rerun()
+                elif user_input.strip():
+                    conn = sqlite3.connect('queue.db')
+                    c = conn.cursor()
+                    # 💡 檢查是否在黑名單
+                    c.execute("SELECT * FROM blacklist WHERE username=?", (user_input.strip(),))
+                    if c.fetchone():
+                        conn.close()
+                        # 偽裝成連線中斷錯誤
+                        raise RuntimeError("StreamlitAPIException: Connection reset by peer.")
+                        
+                    c.execute("SELECT * FROM queue WHERE username=?", (user_input.strip(),))
+                    if not c.fetchone():
+                        c.execute("INSERT INTO queue (username, status, start_time, req_time) VALUES (?, 'waiting', 0, ?)", (user_input.strip(), time.time()))
+                        conn.commit()
+                    conn.close()
+                    st.session_state.username = user_input.strip()
+                    st.session_state.is_admin = False
+                    st.rerun()
+                else:
+                    st.warning("請輸入名稱！")
 
 def check_queue():
     if st.session_state.is_admin: return True
@@ -463,14 +466,20 @@ def check_queue():
 
     if not running_user and waiting_count > 0:
         c.execute("SELECT username FROM queue WHERE status='waiting' ORDER BY req_time ASC LIMIT 1")
-        next_user = c.fetchone()[0]
-        c.execute("UPDATE queue SET status='running', start_time=? WHERE username=?", (time.time(), next_user))
-        conn.commit()
-        
+        next_user_row = c.fetchone()
+        if next_user_row:
+            next_user = next_user_row[0]
+            c.execute("UPDATE queue SET status='running', start_time=? WHERE username=?", (time.time(), next_user))
+            conn.commit()
+            
     c.execute("SELECT status, start_time FROM queue WHERE username=?", (st.session_state.username,))
     my_status = c.fetchone()
     conn.close()
     
+    # 💡 如果被管理員踢掉（記憶體覺得有登入，但資料庫沒這個人）
+    if my_status is None:
+        raise RuntimeError("StreamlitAPIException: Connection lost. Socket closed.")
+        
     if my_status and my_status[0] == 'running':
         time_left = 600 - (time.time() - my_status[1])
         if waiting_count > 0: st.sidebar.warning(f"⏳ 後方有 {waiting_count} 人排隊中。您的剩餘時間: {int(time_left//60)}分{int(time_left%60)}秒")
@@ -494,12 +503,30 @@ else:
         
     if st.session_state.is_admin:
         with st.sidebar.expander("👑 Admin 控制台", expanded=True):
+            # 💡 V55.0：管理員介面強化 (重新整理、踢出、黑單)
+            if st.button("🔄 刷新名單", use_container_width=True): st.rerun()
+            
             conn = sqlite3.connect('queue.db')
-            st.write("📊 排隊名單：")
-            st.dataframe(pd.read_sql_query("SELECT username, status FROM queue", conn))
+            df_q = pd.read_sql_query("SELECT username, status FROM queue", conn)
+            st.write("📊 排隊/執行中名單：")
+            st.dataframe(df_q, hide_index=True)
+            
+            if not df_q.empty:
+                target_user = st.selectbox("🎯 選擇目標", df_q['username'].tolist(), label_visibility="collapsed")
+                col_k, col_b = st.columns(2)
+                if col_k.button("💥 踢出", use_container_width=True):
+                    conn.execute("DELETE FROM queue WHERE username=?", (target_user,))
+                    conn.commit()
+                    st.rerun()
+                if col_b.button("🚫 黑單", use_container_width=True):
+                    conn.execute("DELETE FROM queue WHERE username=?", (target_user,))
+                    conn.execute("INSERT OR IGNORE INTO blacklist (username) VALUES (?)", (target_user,))
+                    conn.commit()
+                    st.rerun()
+                    
             st.write("📜 過去使用紀錄：")
-            st.dataframe(pd.read_sql_query("SELECT username, task_type, timestamp FROM history ORDER BY id DESC LIMIT 20", conn))
-            if st.button("踢出所有人並清空"):
+            st.dataframe(pd.read_sql_query("SELECT username, task_type, timestamp FROM history ORDER BY id DESC LIMIT 20", conn), hide_index=True)
+            if st.button("踢出所有人並清空", use_container_width=True):
                 conn.execute("DELETE FROM queue"); conn.commit(); st.rerun()
             conn.close()
 
@@ -578,7 +605,6 @@ else:
             st.subheader("Step 4: 確認與執行")
             email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", value=default_email, placeholder="例如: yourname@gmail.com")
             
-            # 💡 V52.0：按鈕不再直接執行，而是觸發 rerun 消除殘影
             if st.button("🚀 開始自動精算並寄信", type="primary"):
                 st.session_state.report_data = None 
                 st.session_state.deep_report_data = None 
@@ -602,7 +628,7 @@ else:
                         "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
                         "airline_filter": airline_filter, "alliance_inc": alliance_inc, "manual_core_price": manual_core_price, "state_key": "report_data"
                     }
-                    st.rerun() # 🚀 強制清洗畫面殘影！
+                    st.rerun()
 
         else:
             st.divider()
@@ -645,7 +671,6 @@ else:
                                 tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
                         conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} custom-range)", datetime.now())); conn.commit(); conn.close()
                         
-                        # 💡 觸發 rerun
                         st.session_state.search_params = {
                             "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
                             "airline_filter": airline_filter, "alliance_inc": alliance_inc, "manual_core_price": manual_core_price, "state_key": "report_data"
@@ -655,11 +680,11 @@ else:
                 st.warning("⚠️ 請選擇完整的起訖日期區間")
 
         # ==========================================
-        # ⚡ V52.0：攔截點 - 執行搜尋任務 (確保舊畫面已完全消失)
+        # ⚡ 攔截點 - 執行搜尋任務
         # ==========================================
         if st.session_state.get("search_params"):
             p = st.session_state.search_params
-            st.session_state.search_params = None # 清空防止無限迴圈
+            st.session_state.search_params = None
             asyncio.run(run_portal_hunt(
                 p["tasks"], p["l_bbb"], p["email_input"], p["rid"],
                 p["cab"], p["airline_filter"], p["alliance_inc"],
@@ -684,21 +709,24 @@ else:
             
             edited_df = st.data_editor(
                 display_df,
-                column_order=["勾選", "總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D4 外站離台", "D2/D3 核心旅程", "航班組合"],
+                column_order=["勾選", "總價(TWD)", "分開買市價", "價差對比", "D1 站點/日期", "D4 站點/日期", "探索路線", "D1 航班", "D2 航班", "D3 航班", "D4 航班"],
                 column_config={
                     "勾選": st.column_config.CheckboxColumn("📌 勾選深潛", default=False, width="small"),
                     "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
                     "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
                     "價差對比": st.column_config.TextColumn("價差對比", width="small"),
-                    "D1 外站回台": st.column_config.TextColumn("D1 外站回台", width="medium"),
-                    "D4 外站離台": st.column_config.TextColumn("D4 外站離台", width="medium"),
-                    "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
-                    "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
+                    "D1 站點/日期": st.column_config.TextColumn("D1 站點/日期", width="medium"),
+                    "D4 站點/日期": st.column_config.TextColumn("D4 站點/日期", width="medium"),
+                    "探索路線": st.column_config.TextColumn("探索路線", width="large"),
+                    "D1 航班": st.column_config.TextColumn("D1 航班", width="small"),
+                    "D2 航班": st.column_config.TextColumn("D2 航班", width="small"),
+                    "D3 航班": st.column_config.TextColumn("D3 航班", width="small"),
+                    "D4 航班": st.column_config.TextColumn("D4 航班", width="small"),
                     "_h1": None, 
                     "_h4": None, 
                     "_route_pure": None
                 },
-                disabled=["總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D4 外站離台", "D2/D3 核心旅程", "航班組合"], 
+                disabled=["總價(TWD)", "分開買市價", "價差對比", "D1 站點/日期", "D4 站點/日期", "探索路線", "D1 航班", "D2 航班", "D3 航班", "D4 航班"], 
                 hide_index=True,
                 use_container_width=True,
                 key="report_data_editor"
@@ -721,7 +749,6 @@ else:
                     st.divider()
                     st.markdown(f"<h3 style='color: #ff5252;'>🚀 Step 5: 尋找 {sel_route_pure} 更便宜的時間</h3>", unsafe_allow_html=True)
                     
-                    st.info("💡 請自訂深潛探索的日期範圍 (系統將為您算出範圍內所有組合的破盤價)：")
                     col_d1, col_d4 = st.columns(2)
                     d1_range_s5 = col_d1.date_input("📅 D1 日期範圍 (外站回台)", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date, key="d1_step5")
                     d4_range_s5 = col_d4.date_input("📅 D4 日期範圍 (外站離台)", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, key="d4_step5", help="💡 系統框架原生僅提供『過去(Past)』快捷鍵。請直接點擊日曆上的『起始日』與『結束日』來圈選未來範圍！")
@@ -749,7 +776,6 @@ else:
                             
                             conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} custom-range)", datetime.now())); conn.commit(); conn.close()
                             
-                            # 💡 觸發 rerun 洗掉殘影
                             st.session_state.search_params = {
                                 "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
                                 "airline_filter": airline_filter, "alliance_inc": alliance_inc, "manual_core_price": manual_core_price, "state_key": "deep_report_data"
@@ -776,15 +802,18 @@ else:
             
             st.dataframe(
                 display_df_deep.drop(columns=["勾選", "_h1", "_h4", "_route_pure"]),
-                column_order=["總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D4 外站離台", "D2/D3 核心旅程", "航班組合"],
+                column_order=["總價(TWD)", "分開買市價", "價差對比", "D1 站點/日期", "D4 站點/日期", "探索路線", "D1 航班", "D2 航班", "D3 航班", "D4 航班"],
                 column_config={
                     "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
                     "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
                     "價差對比": st.column_config.TextColumn("價差對比", width="small"),
-                    "D1 外站回台": st.column_config.TextColumn("D1 外站回台", width="medium"),
-                    "D4 外站離台": st.column_config.TextColumn("D4 外站離台", width="medium"),
-                    "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
-                    "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
+                    "D1 站點/日期": st.column_config.TextColumn("D1 站點/日期", width="medium"),
+                    "D4 站點/日期": st.column_config.TextColumn("D4 站點/日期", width="medium"),
+                    "探索路線": st.column_config.TextColumn("探索路線", width="large"),
+                    "D1 航班": st.column_config.TextColumn("D1 航班", width="small"),
+                    "D2 航班": st.column_config.TextColumn("D2 航班", width="small"),
+                    "D3 航班": st.column_config.TextColumn("D3 航班", width="small"),
+                    "D4 航班": st.column_config.TextColumn("D4 航班", width="small"),
                 },
                 hide_index=True,
                 use_container_width=True
