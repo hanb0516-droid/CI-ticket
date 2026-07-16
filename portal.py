@@ -13,7 +13,7 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, date
 from itertools import product
 
-# 💡 安全載入 Fragment 裝飾器 (確保局部渲染，不干擾主搜尋)
+# 💡 安全載入 Fragment 裝飾器 (確保獨立渲染，不干擾主搜尋)
 if hasattr(st, "fragment"):
     fragment_decorator = st.fragment
 elif hasattr(st, "experimental_fragment"):
@@ -24,7 +24,7 @@ else:
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v58.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v59.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db', isolation_level=None)
@@ -46,30 +46,22 @@ if "deep_report_data" not in st.session_state: st.session_state.deep_report_data
 if "deep_report_ref" not in st.session_state: st.session_state.deep_report_ref = 0
 if "search_params" not in st.session_state: st.session_state.search_params = None
 
-try:
-    API_KEYS_LIST = [k.strip() for k in st.secrets["BOOKING_API_KEY"].split(",") if k.strip()]
-    S_SENDER = st.secrets.get("EMAIL_SENDER", "")
-    S_PWD = st.secrets.get("EMAIL_PASSWORD", "")
-    S_RECEIVER = st.secrets.get("EMAIL_RECEIVER", "")
-except Exception:
-    st.error("🚨 缺少 Secrets 設定 (API KEY 或 Email)"); st.stop()
-
 # ==========================================
-# 1. 站點庫定義
+# 1. 站點庫定義 (💡 V59.0 史詩級擴充，納入 BER 柏林等全聯程點)
 # ==========================================
 @st.cache_data
 def get_hubs():
     all_h = {
         "台灣": {"TPE": "台北桃園", "KHH": "高雄小港", "RMQ": "台中清泉崗"},
         "港澳": {"HKG": "香港", "MFM": "澳門"},
-        "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
-        "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊"},
+        "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山", "SDJ": "仙台", "KOJ": "鹿兒島"},
+        "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "CNX": "清邁", "RGN": "仰光", "DEL": "新德里", "BOM": "孟買"},
         "中東/非洲": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "AUH": "阿布達比", "CAI": "開羅", "JNB": "約翰尼斯堡"},
-        "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都柏林"},
-        "東歐/南歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典"},
+        "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都柏林", "EDI": "愛丁堡", "MAN": "曼徹斯特"},
+        "東歐/南歐": {"BER": "柏林勃蘭登堡", "PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典", "AGP": "馬拉加", "VCE": "威尼斯", "HAJ": "漢諾威", "STR": "斯圖加特", "NUE": "紐倫堡"},
         "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華", "LAS": "拉斯維加斯", "DEN": "丹佛", "HNL": "檀香山", "PHX": "鳳凰城", "SLC": "鹽湖城"},
         "美東/中部": {"JFK": "紐約甘迺迪", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多", "DFW": "達拉斯", "MCO": "奧蘭多", "MIA": "邁阿密", "BOS": "波士頓", "ATL": "亞特蘭大", "IAD": "華盛頓", "DTW": "底特律", "MSP": "明尼亞波利斯"},
-        "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
+        "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭", "CHC": "基督城"}
     }
     master_map = {}
     for r, cities in all_h.items(): master_map.update(cities)
@@ -293,13 +285,13 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                                     mk = f.get('carrierInfo', {}).get('marketingCarrier', '')
                                     flight_num = f.get('flightNumber', '')
                                     
-                                    # 💡 V57.1/V58.0：D1/D4 絕對純血，D2/D3 彈性聯程防鬼影
+                                    # 💡 D1/D4 絕對純血，D2/D3 彈性聯程(完美相容歐陸轉機直掛並斬斷假聯程)
                                     if airline_mode == "🌸 華航限定 (直營/聯營)":
                                         primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
                                         if op in primaries or mk in primaries: has_primary = True
-                                        if seg_idx in [0, 3]: # D1 & D4: 嚴格拒絕聯營外家
+                                        if seg_idx in [0, 3]: 
                                             if op not in primaries and mk not in primaries: all_legs_valid = False
-                                        else: # D2 & D3: 允許合法聯營 
+                                        else: 
                                             if op not in primaries and mk not in primaries and op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
                                             
                                     elif airline_mode == "🌳 長榮限定 (直營/聯營)":
@@ -321,7 +313,7 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                                     else:
                                         primaries = set()
                                     
-                                    # 💡 洗滌顯示代碼：若為 Codeshare，優先還原本家血統
+                                    # 還原共享班號為直營代碼顯示
                                     display_code = mk
                                     if airline_mode != "🌍 無限制航空公司":
                                         if mk in primaries: display_code = mk
@@ -617,7 +609,6 @@ else:
     if task_mode:
         st.divider()
         
-        # 💡 V58.0: 完美加回「多點進出」的核心行程彈性選擇
         st.subheader("Step 2: 填寫核心旅程")
         trip_type = st.radio("✈️ 核心行程類型", ["來回 (Round Trip)", "多點進出/不同點進出 (Multi-city)"], horizontal=True)
         
@@ -625,7 +616,7 @@ else:
             c1, c2 = st.columns(2)
             d2_loc = c1.selectbox("✈️ 從台灣出發地", ALL_CITIES_LIST, index=safe_idx("TPE"))
             d2_date = c1.date_input("📅 出發日期", value=date(2027, 2, 10))
-            d3_loc = c2.selectbox("✈️ 主要目的地", ALL_CITIES_LIST, index=safe_idx("CPH"))
+            d3_loc = c2.selectbox("✈️ 主要目的地", ALL_CITIES_LIST, index=safe_idx("BER")) # 💡 預設可以直接選 BER 囉
             d3_date = c2.date_input("📅 回程日期", value=date(2027, 2, 25))
             
             d2o_fix, d2d_fix = d2_loc.split(" ")[0], d3_loc.split(" ")[0]
@@ -634,10 +625,10 @@ else:
             c1, c2 = st.columns(2)
             d2o_loc = c1.selectbox("✈️ D2 出發地", ALL_CITIES_LIST, index=safe_idx("TPE"))
             d2_date = c1.date_input("📅 D2 出發日期", value=date(2027, 2, 10))
-            d2d_loc = c2.selectbox("✈️ D2 目的地", ALL_CITIES_LIST, index=safe_idx("FRA"))
+            d2d_loc = c2.selectbox("✈️ D2 目的地", ALL_CITIES_LIST, index=safe_idx("BER")) # 💡 完美自訂包含 BER 的聯程點
             
             c3, c4 = st.columns(2)
-            d3o_loc = c3.selectbox("✈️ D3 回程地", ALL_CITIES_LIST, index=safe_idx("CPH"))
+            d3o_loc = c3.selectbox("✈️ D3 回程地", ALL_CITIES_LIST, index=safe_idx("PRG"))
             d3_date = c3.date_input("📅 D3 回程日期", value=date(2027, 2, 25))
             d3d_loc = c4.selectbox("✈️ D3 返回地", ALL_CITIES_LIST, index=safe_idx("TPE"))
             
@@ -681,7 +672,7 @@ else:
                                  {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
                                  {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4_dt.strftime("%Y-%m-%d")}]
                             tasks.append((l, d1_dt.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4_dt.strftime("%Y-%m-%d")))
-                    conn = sqlite3.connect('queue.db', isolation_level=None); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.close()
+                    conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.close()
                     
                     st.session_state.search_params = {
                         "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
@@ -693,7 +684,6 @@ else:
             st.divider()
             st.subheader("Step 3: 填寫外站旅程與探索範圍")
             cc1, cc2 = st.columns(2)
-            # 💡 V58.0: 聰明語意提示，接駁段對話更加精準
             d1_loc = cc1.selectbox(f"D1 想要從哪裡飛往 {d2o_fix}？", ALL_CITIES_LIST, index=safe_idx("NRT"))
             d4_loc = cc2.selectbox(f"D4 抵達 {d3d_fix} 後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
             
@@ -729,7 +719,7 @@ else:
                                      {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
                                      {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                                 tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
-                        conn = sqlite3.connect('queue.db', isolation_level=None); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} custom-range)", datetime.now())); conn.close()
+                        conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} custom-range)", datetime.now())); conn.close()
                         
                         st.session_state.search_params = {
                             "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
@@ -834,7 +824,7 @@ else:
                                          {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{sel_h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                                     tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
                             
-                            conn = sqlite3.connect('queue.db', isolation_level=None); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} custom-range)", datetime.now())); conn.close()
+                            conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} custom-range)", datetime.now())); conn.commit(); conn.close()
                             
                             st.session_state.search_params = {
                                 "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
