@@ -16,7 +16,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v50.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v50.1 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
@@ -76,7 +76,7 @@ def safe_idx(target):
 # ==========================================
 # 2. 核心搜尋與 DataFrame 轉換
 # ==========================================
-# 💡 V50.0 修改：全面優化欄位名稱、順序與內容拼裝邏輯
+# 💡 V50.1 修改：拆分航線為 D1、D2/D3、D4 三個欄位
 def create_dataframe(res):
     if not res: return pd.DataFrame()
     df_data = []
@@ -84,14 +84,16 @@ def create_dataframe(res):
         diff = r['diff']
         diff_str = f"🟢 省 {int(diff):,}" if diff >= 0 else f"🔴 貴 {abs(int(diff)):,}"
         
-        # 萃取簡短日期 (MM/DD)
         d1_short = r['d1'][5:].replace('-','/')
         d2_short = r['d2'][5:].replace('-','/')
         d3_short = r['d3'][5:].replace('-','/')
         d4_short = r['d4'][5:].replace('-','/')
         
-        # 拼裝完整航線與時間 (包含接駁邏輯)
-        route_full = f"{r['h1']}({d1_short}) ➔ {r['d2o']} | {r['d2o']}({d2_short}) ➔ {r['d2d']} | {r['d3o']}({d3_short}) ➔ {r['d3d']} | {r['d3d']}({d4_short}) ➔ {r['h4']}"
+        # 拆解成三個專屬欄位
+        d1_str = f"({d1_short}) {r['h1']} ➔ {r['d2o']}"
+        d23_str = f"({d2_short}) {r['d2o']} ➔ {r['d2d']} | ({d3_short}) {r['d3o']} ➔ {r['d3d']}"
+        d4_str = f"({d4_short}) {r['d3d']} ➔ {r['h4']}"
+        
         route_pure = f"{r['h1']} ➔ {r['d2o']} ➔ {r['d2d']} ➔ {r['d3d']} ➔ {r['h4']}"
 
         df_data.append({
@@ -99,7 +101,9 @@ def create_dataframe(res):
             "總價(TWD)": f"💰 {r['total']:,}",
             "分開買市價": f"{int(r['ref_price']):,}",
             "價差對比": diff_str,
-            "完整航線與日期": route_full,
+            "D1 外站回台": d1_str,
+            "D2/D3 核心旅程": d23_str,
+            "D4 外站離台": d4_str,
             "航班組合": " | ".join(r['legs']),
             "_h1": r['h1'],
             "_h4": r['h4'],
@@ -107,9 +111,9 @@ def create_dataframe(res):
         })
     return pd.DataFrame(df_data)
 
-# 信件內容也同步修改
+# 信件內容也同步切開三個欄位，讓表格排版更清爽
 def generate_table_html(res, core_ref):
-    header = "<tr style='background:#333;color:#fff;font-size:16px;'><th>總價(TWD)</th><th>分開買市價</th><th>價差對比</th><th>完整航線與日期</th><th>航班組合</th></tr>"
+    header = "<tr style='background:#333;color:#fff;font-size:16px;'><th>總價(TWD)</th><th>分開買市價</th><th>價差對比</th><th>D1 外站回台</th><th>D2/D3 核心旅程</th><th>D4 外站離台</th><th>航班組合</th></tr>"
     rows = []
     for r in res[:100]:
         diff = r['diff']
@@ -120,13 +124,19 @@ def generate_table_html(res, core_ref):
         d2_short = r['d2'][5:].replace('-','/')
         d3_short = r['d3'][5:].replace('-','/')
         d4_short = r['d4'][5:].replace('-','/')
-        route_str = f"{r['h1']}({d1_short}) ➔ {r['d2o']} | {r['d2o']}({d2_short}) ➔ {r['d2d']} | {r['d3o']}({d3_short}) ➔ {r['d3d']} | {r['d3d']}({d4_short}) ➔ {r['h4']}"
+        
+        d1_str = f"({d1_short}) {r['h1']} ➔ {r['d2o']}"
+        d23_str = f"({d2_short}) {r['d2o']} ➔ {r['d2d']}<br>({d3_short}) {r['d3o']} ➔ {r['d3d']}"
+        d4_str = f"({d4_short}) {r['d3d']} ➔ {r['h4']}"
+        
         f_str = f"<span style='color:#666; font-size:12px;'>{r['legs'][0]}<br>{r['legs'][1]}<br>{r['legs'][2]}<br>{r['legs'][3]}</span>"
         
         row_html = f"<tr><td><b style='font-size:16px;'>{r['total']:,}</b></td>"
         row_html += f"<td style='font-size:14px;color:#888;'>{int(r['ref_price']):,}</td>"
         row_html += f"<td>{diff_str}</td>"
-        row_html += f"<td style='font-size:14px;'>{route_str}</td>"
+        row_html += f"<td style='font-size:14px;'>{d1_str}</td>"
+        row_html += f"<td style='font-size:14px;'>{d23_str}</td>"
+        row_html += f"<td style='font-size:14px;'>{d4_str}</td>"
         row_html += f"<td>{f_str}</td></tr>"
         rows.append(row_html)
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;'><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
@@ -355,14 +365,17 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
                 if final_res:
                     temp_sorted = sorted(final_res, key=lambda x: x['total'])[:50]
                     temp_df = create_dataframe(temp_sorted)
-                    # 💡 即時開獎也套用最佳化寬度
+                    
+                    # 💡 即時開獎版也同步套用新欄位與順序
                     live_table.dataframe(
                         temp_df.drop(columns=["勾選", "_h1", "_h4", "_route_pure"]),
                         column_config={
                             "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
                             "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
                             "價差對比": st.column_config.TextColumn("價差對比", width="small"),
-                            "完整航線與日期": st.column_config.TextColumn("完整航線與日期", width="large"),
+                            "D1 外站回台": st.column_config.TextColumn("D1 外站回台", width="medium"),
+                            "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
+                            "D4 外站離台": st.column_config.TextColumn("D4 外站離台", width="medium"),
                             "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
                         },
                         hide_index=True,
@@ -599,7 +612,7 @@ else:
                     asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "report_data"))
 
         # ==========================================
-        # 📊 階段 1：主報表展示區 (V50.0 - 寬度與順序最佳化)
+        # 📊 階段 1：主報表展示區 
         # ==========================================
         if st.session_state.report_data:
             st.divider()
@@ -614,22 +627,24 @@ else:
                 
             display_df = create_dataframe(display_data)
             
-            # 💡 V50.0：套用全新直覺順序與寬度控制
+            # 💡 V50.1：套用完美拆分與欄位寬度配置
             edited_df = st.data_editor(
                 display_df,
-                column_order=["勾選", "總價(TWD)", "分開買市價", "價差對比", "完整航線與日期", "航班組合"],
+                column_order=["勾選", "總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D2/D3 核心旅程", "D4 外站離台", "航班組合"],
                 column_config={
                     "勾選": st.column_config.CheckboxColumn("📌 勾選深潛", default=False, width="small"),
                     "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
                     "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
                     "價差對比": st.column_config.TextColumn("價差對比", width="small"),
-                    "完整航線與日期": st.column_config.TextColumn("完整航線與日期", width="large"),
+                    "D1 外站回台": st.column_config.TextColumn("D1 外站回台", width="medium"),
+                    "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
+                    "D4 外站離台": st.column_config.TextColumn("D4 外站離台", width="medium"),
                     "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
                     "_h1": None, 
                     "_h4": None, 
                     "_route_pure": None
                 },
-                disabled=["總價(TWD)", "分開買市價", "價差對比", "完整航線與日期", "航班組合"], 
+                disabled=["總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D2/D3 核心旅程", "D4 外站離台", "航班組合"], 
                 hide_index=True,
                 use_container_width=True,
                 key="report_data_editor"
@@ -690,12 +705,14 @@ else:
             
             st.dataframe(
                 display_df_deep.drop(columns=["勾選", "_h1", "_h4", "_route_pure"]),
-                column_order=["總價(TWD)", "分開買市價", "價差對比", "完整航線與日期", "航班組合"],
+                column_order=["總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D2/D3 核心旅程", "D4 外站離台", "航班組合"],
                 column_config={
                     "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
                     "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
                     "價差對比": st.column_config.TextColumn("價差對比", width="small"),
-                    "完整航線與日期": st.column_config.TextColumn("完整航線與日期", width="large"),
+                    "D1 外站回台": st.column_config.TextColumn("D1 外站回台", width="medium"),
+                    "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
+                    "D4 外站離台": st.column_config.TextColumn("D4 外站離台", width="medium"),
                     "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
                 },
                 hide_index=True,
