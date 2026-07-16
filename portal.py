@@ -13,8 +13,8 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, date
 from itertools import product
 
-# 💡 基於 v55.0 架構修改，無 v56.0 更新，版本號直接升級 v57.0！
-st.set_page_config(page_title="Flight Actuary v57.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
+# 💡 基於 v55.0 架構修改，無 v56.0 更新，版本號直接升級 v57.1！
+st.set_page_config(page_title="Flight Actuary v57.1 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
@@ -30,7 +30,7 @@ init_db()
 if "username" not in st.session_state: st.session_state.username = None
 if "is_admin" not in st.session_state: st.session_state.is_admin = False
 if "run_id" not in st.session_state: st.session_state.run_id = None
-if "valid_offers" notebook not in st.session_state: st.session_state.valid_offers = []
+if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 if "report_data" not in st.session_state: st.session_state.report_data = None
 if "report_ref" not in st.session_state: st.session_state.report_ref = 0
 if "deep_report_data" not in st.session_state: st.session_state.deep_report_data = None
@@ -56,7 +56,7 @@ def get_hubs():
         "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
         "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊"},
         "中東/非洲": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "AUH": "阿布達比", "CAI": "開羅", "JNB": "約翰尼斯堡"},
-        "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都跨林"},
+        "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都柏林"},
         "東歐/南歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典"},
         "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華", "LAS": "拉斯維加斯", "DEN": "丹佛", "HNL": "檀香山", "PHX": "鳳凰城", "SLC": "鹽湖城"},
         "美東/中部": {"JFK": "紐約甘迺迪", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多", "DFW": "達拉斯", "MCO": "奧蘭多", "MIA": "邁阿密", "BOS": "波士頓", "ATL": "亞特蘭大", "IAD": "華盛頓", "DTW": "底特律", "MSP": "明尼亞波利斯"},
@@ -188,6 +188,7 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
     CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
     CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
+    EK_PRIMARY, EK_INTERLINE = {"EK"}, {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
     async def _fetch_and_parse(u, p, is_multi=False):
         async with sem:
@@ -213,6 +214,9 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                                         elif airline_mode == "🌳 長榮限定 (直營/聯營)":
                                             if op in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY) or mk in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY): has_primary = True
                                             elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                        elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
+                                            if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
+                                            elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
                                     if airline_mode != "🌍 無限制航空公司":
                                         if not has_primary or not all_legs_valid: is_valid_airline = False; break
                                 if is_valid_airline: valid.append({"total": o.get('priceBreakdown', {}).get('total', {}).get('units', 0)})
@@ -253,63 +257,65 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
     CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
     CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
+    EK_PRIMARY, EK_INTERLINE = {"EK"}, {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
-    async with sem:
-        for _ in range(2):
-            try:
-                headers = {"x-rapidapi-key": random.choice(API_KEYS_LIST), "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
-                res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cab, "adults": "1", "currency_code": "TWD"}, timeout=35.0)
-                if res.status_code == 200:
-                    offers = res.json().get('data', {}).get('flightOffers', [])
-                    if not offers: return None
-                    valid = []
-                    for o in offers:
-                        l_sum = []
-                        is_valid_airline = True
-                        for seg_idx, seg in enumerate(o.get('segments', [])):
-                            seg_flights = []
-                            has_primary, all_legs_valid = False, True
-                            for leg in seg.get('legs', []):
-                                f = leg.get('flightInfo', {})
-                                op, mk = f.get('carrierInfo', {}).get('operatingCarrier', ''), f.get('carrierInfo', {}).get('marketingCarrier', '')
+    async def _fetch_and_parse(u, p, is_multi=False):
+        async with sem:
+            for _ in range(2):
+                try:
+                    headers = {"x-rapidapi-key": random.choice(API_KEYS_LIST), "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
+                    res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cab, "adults": "1", "currency_code": "TWD"}, timeout=35.0)
+                    if res.status_code == 200:
+                        offers = res.json().get('data', {}).get('flightOffers', [])
+                        if not offers: return None
+                        valid = []
+                        for o in offers:
+                            l_sum = []
+                            is_valid_airline = True
+                            for seg_idx, seg in enumerate(o.get('segments', [])):
+                                seg_flights = []
+                                has_primary, all_legs_valid = False, True
+                                for leg in seg.get('legs', []):
+                                    f = leg.get('flightInfo', {})
+                                    op, mk = f.get('carrierInfo', {}).get('operatingCarrier', ''), f.get('carrierInfo', {}).get('marketingCarrier', '')
+                                    
+                                    # 💡 V57.1 嚴格血統洗滌引擎：防止跨洋大段混入鬼影聯程
+                                    if airline_mode == "🌸 華航限定 (直營/聯營)":
+                                        if seg_idx in [1, 2]: # 精準鎖定核心跨洋段
+                                            primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
+                                            if op not in primaries and mk not in primaries:
+                                                all_legs_valid = False
+                                        else: # 接駁段
+                                            if op in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY) or mk in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY): has_primary = True
+                                            elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
+                                            
+                                    elif airline_mode == "🌳 長榮限定 (直營/聯營)":
+                                        if seg_idx in [1, 2]:
+                                            primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
+                                            if op not in primaries and mk not in primaries:
+                                                all_legs_valid = False
+                                        else:
+                                            if op in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY) or mk in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY): has_primary = True
+                                            elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                    
+                                    # 💡 如果是共享代碼，優先抓營運(實際執飛)代碼還原直營血統
+                                    flight_num = f.get('flightNumber', '')
+                                    display_code = mk if (mk in ["CI", "AE", "BR", "B7"]) else (op if op else mk)
+                                    seg_flights.append(f"{display_code}{flight_num}")
+                                    
+                                if airline_mode != "🌍 無限制航空公司":
+                                    if not has_primary or not all_legs_valid: is_valid_airline = False; break
+                                l_sum.append("|".join(seg_flights))
                                 
-                                # 💡 嚴格血統洗滌引擎：防止跨洋大段 (D2, D3) 混入像 BA692 這種鬼影聯程
-                                if airline_mode == "🌸 華航限定 (直營/聯營)":
-                                    if seg_idx in [1, 2]: # 精準鎖定核心跨洋來回航段 (D2, D3)
-                                        # 華航直營/聯營模式下，核心大段落絕不允許非天合/非華航核心班號
-                                        primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
-                                        if op not in primaries and mk not in primaries:
-                                            all_legs_valid = False
-                                    else: # 接駁段 (D1, D4) 允許 Interline 聯營
-                                        if op in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY) or mk in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY): has_primary = True
-                                        elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
-                                        
-                                elif airline_mode == "🌳 長榮限定 (直營/聯營)":
-                                    if seg_idx in [1, 2]:
-                                        primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
-                                        if op not in primaries and mk not in primaries:
-                                            all_legs_valid = False
-                                    else:
-                                        if op in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY) or mk in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY): has_primary = True
-                                        elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                            if is_valid_airline and len(l_sum) == 4:
+                                p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
+                                valid.append({"total": p, "legs": l_sum, "h1": h1, "d2o": d2o, "d2d": d2d, "d3o": d3o, "d3d": d3d, "h4": h4, "d1": d1, "d2": d2, "d3": d3, "d4": d4})
                                 
-                                # 💡 行程內直接清洗航班代號顯示：如果是共享代碼，優先抓營運(實際執飛)代碼還原直營血統
-                                flight_num = f.get('flightNumber', '')
-                                display_code = mk if (mk in ["CI", "AE", "BR", "B7"]) else (op if op else mk)
-                                seg_flights.append(f"{display_code}{flight_num}")
-                                
-                            if airline_mode != "🌍 無限制航空公司":
-                                if not has_primary or not all_legs_valid: is_valid_airline = False; break
-                            l_sum.append("|".join(seg_flights))
-                            
-                        if is_valid_airline and len(l_sum) == 4:
-                            p = o.get('priceBreakdown', {}).get('total', {}).get('units', 0)
-                            valid.append({"total": p, "legs": l_sum, "h1": h1, "d2o": d2o, "d2d": d2d, "d3o": d3o, "d3d": d3d, "h4": h4, "d1": d1, "d2": d2, "d3": d3, "d4": d4})
-                            
-                    return sorted(valid, key=lambda x: x['total'])[0] if valid else None
-                elif res.status_code == 429: await asyncio.sleep(2.0)
-            except: await asyncio.sleep(1.0)
-        return None
+                        return sorted(valid, key=lambda x: x['total'])[0] if valid else None
+                    elif res.status_code == 429: await asyncio.sleep(2.0)
+                except: await asyncio.sleep(1.0)
+            return None
+    return await _fetch_and_parse(url, {})
 
 async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, alliance_flag, manual_core_price, state_key="report_data"):
     total_tasks = len(tasks)
@@ -433,7 +439,7 @@ def login_screen():
                     c.execute("SELECT * FROM blacklist WHERE username=?", (user_input.strip(),))
                     if c.fetchone():
                         conn.close()
-                        raise RuntimeError("StreamlitAPIException: Connection reset by peer.")
+                        raise RuntimeError("WebSocketConnectionClosed: The connection was closed unexpectedly.")
                         
                     c.execute("SELECT * FROM queue WHERE username=?", (user_input.strip(),))
                     if not c.fetchone():
@@ -475,7 +481,7 @@ def check_queue():
     conn.close()
     
     if my_status is None:
-        raise RuntimeError("StreamlitAPIException: Connection lost. Socket closed.")
+        raise RuntimeError("WebSocketConnectionClosed: The connection was closed unexpectedly.")
         
     if my_status and my_status[0] == 'running':
         time_left = 600 - (time.time() - my_status[1])
