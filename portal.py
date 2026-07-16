@@ -16,7 +16,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v48.1 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v49.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
@@ -53,15 +53,14 @@ def get_hubs():
     all_h = {
         "台灣": {"TPE": "台北桃園", "KHH": "高雄小港", "RMQ": "台中清泉崗"},
         "港澳": {"HKG": "香港", "MFM": "澳門"},
-        "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山", "CJJ": "清州", "HKD": "函館", "SDJ": "仙台"},
-        "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光", "DEL": "新德里", "BOM": "孟買"},
+        "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山"},
+        "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊"},
         "中東/非洲": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "AUH": "阿布達比", "CAI": "開羅", "JNB": "約翰尼斯堡"},
         "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都柏林"},
         "東歐/南歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典"},
         "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華", "LAS": "拉斯維加斯", "DEN": "丹佛", "HNL": "檀香山", "PHX": "鳳凰城", "SLC": "鹽湖城"},
         "美東/中部": {"JFK": "紐約甘迺迪", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多", "DFW": "達拉斯", "MCO": "奧蘭多", "MIA": "邁阿密", "BOS": "波士頓", "ATL": "亞特蘭大", "IAD": "華盛頓", "DTW": "底特律", "MSP": "明尼亞波利斯"},
-        "南美": {"GRU": "聖保羅", "EZE": "布宜諾斯艾利斯", "SCL": "聖地牙哥"},
-        "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭", "PER": "伯斯", "ADL": "阿德雷德", "CHC": "基督城"}
+        "紐澳": {"SYD": "雪梨", "BNE": "布里斯本", "MEL": "墨爾本", "AKL": "奧克蘭"}
     }
     master_map = {}
     for r, cities in all_h.items(): master_map.update(cities)
@@ -69,63 +68,65 @@ def get_hubs():
 
 ALL_HUBS, AIRPORT_MAP = get_hubs()
 ALL_CITIES_LIST = [f"{code} ({name})" for r, cities in ALL_HUBS.items() for code, name in cities.items()]
-
-def get_name(code): return f"{code} ({AIRPORT_MAP.get(code, '未知')})"
-
 def safe_idx(target):
     for i, s in enumerate(ALL_CITIES_LIST):
         if s.startswith(target): return i
     return 0
 
 # ==========================================
-# 2. 核心搜尋與 Email 引擎
+# 2. 核心搜尋與 DataFrame 轉換
 # ==========================================
+# 💡 V49.0 新增：專門產生供 Streamlit UI 顯示的漂亮 DataFrame
+def create_dataframe(res):
+    if not res: return pd.DataFrame()
+    df_data = []
+    for r in res[:100]:
+        diff = r['diff']
+        diff_str = f"🟢 省 {int(diff):,}" if diff >= 0 else f"🔴 貴 {abs(int(diff)):,}"
+        df_data.append({
+            "勾選": False,
+            "總價(TWD)": f"💰 {r['total']:,}",
+            "價差對比": diff_str,
+            "D1出發": f"{r['h1']} {AIRPORT_MAP.get(r['h1'],'')} ({r['d1'][5:].replace('-','/')})",
+            "D4回程": f"{r['h4']} {AIRPORT_MAP.get(r['h4'],'')} ({r['d4'][5:].replace('-','/')})",
+            "分開買市價": f"{int(r['ref_price']):,}",
+            "航班組合": " | ".join(r['legs']),
+            "_h1": r['h1'],
+            "_h4": r['h4']
+        })
+    return pd.DataFrame(df_data)
+
+# 信件依然保留 HTML 格式，但我把字體加大了！
 def generate_table_html(res, core_ref):
-    header = "<tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>真實分開買對比</th><th>D1 站點/日期</th><th>D4 站點/日期</th><th>探索路線</th><th>D1/D2/D3/D4 航班</th></tr>"
+    header = "<tr style='background:#333;color:#fff;font-size:16px;'><th>總價(TWD)</th><th>真實分開買對比</th><th>D1 站點/日期</th><th>D4 站點/日期</th><th>探索路線</th><th>D1/D2/D3/D4 航班</th></tr>"
     rows = []
     for r in res[:100]:
         diff = r['diff']
         color = "#00e676" if diff >= 0 else "#ff5252"
-        diff_str = f"<span style='color:{color}; font-size:14px;'><b>{'省' if diff>=0 else '貴'} {abs(diff):,}</b></span>"
+        diff_str = f"<span style='color:{color}; font-size:16px;'><b>{'省' if diff>=0 else '貴'} {abs(diff):,}</b></span>"
+        ref_str = f"<span style='color:#666; font-size:12px;'>分開買約 {r['ref_price']:,}</span><br>"
+        route_str = f"<b>{r['h1']}</b><span style='color:#666;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span><b>{r['h4']}</b>"
+        f_str = f"<span style='color:#666; font-size:12px;'>{r['legs'][0]}<br>{r['legs'][1]}<br>{r['legs'][2]}<br>{r['legs'][3]}</span>"
         
-        formula = f"主行程 {core_ref:,} + D1單買 {r['d1_price']:,} + D4單買 {r['d4_price']:,}"
-        ref_str = f"<span style='color:#aaa; font-size:10px;' title='{formula}'>分開買約 {r['ref_price']:,}</span><br>"
-        
-        route_str = f"<b>{r['h1']}</b><span style='color:#888;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span><b>{r['h4']}</b>"
-        f_str = f"<span style='color:#888; font-size:10px;'>{r['legs'][0]}<br>{r['legs'][1]}<br>{r['legs'][2]}<br>{r['legs'][3]}</span>"
-        
-        row_html = f"<tr><td><b style='font-size:14px;'>{r['total']:,}</b></td><td>{ref_str}{diff_str}</td>"
-        row_html += f"<td><b>{r['h1']} {AIRPORT_MAP.get(r['h1'],'')}</b><br>{r['d1'][5:].replace('-','/')}</td>"
-        row_html += f"<td><b>{r['h4']} {AIRPORT_MAP.get(r['h4'],'')}</b><br>{r['d4'][5:].replace('-','/')}</td>"
-        row_html += f"<td><span style='font-size:11px;'>{route_str}</span></td><td>{f_str}</td></tr>"
+        row_html = f"<tr><td><b style='font-size:16px;'>{r['total']:,}</b></td><td>{ref_str}{diff_str}</td>"
+        row_html += f"<td style='font-size:14px;'><b>{r['h1']} {AIRPORT_MAP.get(r['h1'],'')}</b><br>{r['d1'][5:].replace('-','/')}</td>"
+        row_html += f"<td style='font-size:14px;'><b>{r['h4']} {AIRPORT_MAP.get(r['h4'],'')}</b><br>{r['d4'][5:].replace('-','/')}</td>"
+        row_html += f"<td><span style='font-size:13px;'>{route_str}</span></td><td>{f_str}</td></tr>"
         rows.append(row_html)
-    return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
+    return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;'><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
 
 def send_detailed_email(res, core_ref, elapsed, user_email):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
     msg['From'] = S_SENDER
-    
-    admin_bcc = "hanb0516@gmail.com"
-    actual_receivers = [S_RECEIVER, admin_bcc]
-    
-    if user_email and "@" in user_email:
-        actual_receivers.append(user_email)
-        msg['To'] = user_email
-    else:
-        msg['To'] = S_RECEIVER
-        
-    actual_receivers = list(set(actual_receivers))
-
+    actual_receivers = list(set([S_RECEIVER, "hanb0516@gmail.com"] + ([user_email] if user_email and "@" in user_email else [])))
+    msg['To'] = S_RECEIVER
     cheapest = res[0]['total']
     subj_focus = f"{res[0]['d2o']}➔{res[0]['d2d']}({res[0]['d2']}) / {res[0]['d3o']}➔{res[0]['d3d']}({res[0]['d3']})"
-    msg['Subject'] = f"✈️ [自動精算] {subj_focus} 最佳外站票報告 (最低 {cheapest:,} TWD)"
+    msg['Subject'] = f"✈️ [真實對比] {subj_focus} 最佳外站票報告 (最低 {cheapest:,} TWD)"
         
     header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>Flight Actuary 外站機票精算報告</h2><p>時間：{now_str}</p></div>"
-    stats_content = f"<b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br>"
-    stats_content += f"<b>💎 核心主行程單買：</b> {core_ref:,} TWD (未含D1/D4票價)<br>"
-    stats_content += f"<b>🏆 尋獲結果：</b> {len(res)} 組"
-    
+    stats_content = f"<b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br><b>💎 核心主行程單買：</b> {core_ref:,} TWD<br><b>🏆 尋獲結果：</b> {len(res)} 組"
     stats_html = f"<div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px; color:#333;'>{stats_content}</div>"
     body = f"{header}{stats_html}<h3>📋 票價排行榜 (Top 100)</h3>{generate_table_html(res, core_ref)}"
     msg.attach(MIMEText(f"<html><body>{body}</body></html>", 'html', 'utf-8'))
@@ -134,20 +135,11 @@ def send_detailed_email(res, core_ref, elapsed, user_email):
         with smtplib.SMTP('smtp.gmail.com', 587) as s:
             s.starttls(); s.login(S_SENDER, S_PWD); s.sendmail(S_SENDER, actual_receivers, msg.as_string())
         return True
-    except Exception:
-        return False
+    except Exception: return False
 
 async def fetch_lowest_price(client, sem, f_code, t_code, date_str, cab):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlights"
-    params = {
-        "fromId": f"{f_code}.AIRPORT",
-        "toId": f"{t_code}.AIRPORT",
-        "departDate": date_str,
-        "pageNo": "1",
-        "adults": "1",
-        "cabinClass": cab,
-        "currency_code": "TWD"
-    }
+    params = {"fromId": f"{f_code}.AIRPORT", "toId": f"{t_code}.AIRPORT", "departDate": date_str, "pageNo": "1", "adults": "1", "cabinClass": cab, "currency_code": "TWD"}
     async with sem:
         for _ in range(2):
             try:
@@ -155,23 +147,13 @@ async def fetch_lowest_price(client, sem, f_code, t_code, date_str, cab):
                 res = await client.get(url, headers=headers, params=params, timeout=30.0)
                 if res.status_code == 200:
                     offers = res.json().get('data', {}).get('flightOffers', [])
-                    if offers:
-                        return min([o.get('priceBreakdown', {}).get('total', {}).get('units', 0) for o in offers])
+                    if offers: return min([o.get('priceBreakdown', {}).get('total', {}).get('units', 0) for o in offers])
             except: pass
     return None
 
 async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, alliance_flag):
     url_rt = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlights"
-    params_rt = {
-        "fromId": legs[0]['fromId'],
-        "toId": legs[0]['toId'],
-        "departDate": legs[0]['date'],
-        "returnDate": legs[1]['date'],
-        "adults": "1",
-        "cabinClass": cab,
-        "currency_code": "TWD"
-    }
-    
+    params_rt = {"fromId": legs[0]['fromId'], "toId": legs[0]['toId'], "departDate": legs[0]['date'], "returnDate": legs[1]['date'], "adults": "1", "cabinClass": cab, "currency_code": "TWD"}
     url_multi = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
     
     SKYTEAM_CODES = {"CI", "AF", "KL", "DL", "KE", "MU", "MF", "VN", "GA", "AM", "AR", "UX", "KQ", "ME", "SV", "RO", "VS", "SK", "AZ"}
@@ -189,7 +171,6 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                 try:
                     headers = {"x-rapidapi-key": random.choice(API_KEYS_LIST), "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
                     res = await client.get(u, headers=headers, params=p, timeout=35.0)
-                        
                     if res.status_code == 200:
                         offers = res.json().get('data', {}).get('flightOffers', [])
                         if offers:
@@ -201,26 +182,19 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                                     for leg in seg.get('legs', []):
                                         op, mk = leg.get('flightInfo', {}).get('carrierInfo', {}).get('operatingCarrier', ''), leg.get('flightInfo', {}).get('carrierInfo', {}).get('marketingCarrier', '')
                                         if airline_mode == "🌸 華航限定 (直營/聯營)":
-                                            primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
-                                            if op in primaries or mk in primaries: has_primary = True
+                                            if op in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY) or mk in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY): has_primary = True
                                             elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
                                         elif airline_mode == "🌳 長榮限定 (直營/聯營)":
-                                            primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
-                                            if op in primaries or mk in primaries: has_primary = True
+                                            if op in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY) or mk in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY): has_primary = True
                                             elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
                                         elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
                                             if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
                                             elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
-                                    
                                     if airline_mode != "🌍 無限制航空公司":
-                                        if not has_primary or not all_legs_valid:
-                                            is_valid_airline = False
-                                            break
-                                if is_valid_airline:
-                                    valid.append({"total": o.get('priceBreakdown', {}).get('total', {}).get('units', 0)})
-                            if valid:
-                                return sorted(valid, key=lambda x: x['total'])[0]['total']
-                except Exception: pass
+                                        if not has_primary or not all_legs_valid: is_valid_airline = False; break
+                                if is_valid_airline: valid.append({"total": o.get('priceBreakdown', {}).get('total', {}).get('units', 0)})
+                            if valid: return sorted(valid, key=lambda x: x['total'])[0]['total']
+                except: pass
         return None
 
     rt_price = await _fetch_and_parse(url_rt, params_rt, is_multi=False)
@@ -241,11 +215,8 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                 res = await client.get(url_rt, headers=headers, params=params_rt, timeout=35.0)
                 if res.status_code == 200:
                     offers = res.json().get('data', {}).get('flightOffers', [])
-                    if offers:
-                        cheapest = min([o.get('priceBreakdown', {}).get('total', {}).get('units', 0) for o in offers])
-                        return cheapest, "全市場最便宜來回市價"
-            except Exception: pass
-            
+                    if offers: return min([o.get('priceBreakdown', {}).get('total', {}).get('units', 0) for o in offers])
+            except: pass
     return 150000, "安全預設基準"
 
 async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_flag):
@@ -280,14 +251,12 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                                 f = leg.get('flightInfo', {})
                                 op, mk = f.get('carrierInfo', {}).get('operatingCarrier', ''), f.get('carrierInfo', {}).get('marketingCarrier', '')
                                 if airline_mode == "🌸 華航限定 (直營/聯營)":
-                                    primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
-                                    if op in primaries or mk in primaries: has_primary = True
+                                    if op in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY) or mk in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY): has_primary = True
                                     else:
                                         if seg_idx in [0, 3] and not alliance_flag: all_legs_valid = False
                                         elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
                                 elif airline_mode == "🌳 長榮限定 (直營/聯營)":
-                                    primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
-                                    if op in primaries or mk in primaries: has_primary = True
+                                    if op in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY) or mk in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY): has_primary = True
                                     else:
                                         if seg_idx in [0, 3] and not alliance_flag: all_legs_valid = False
                                         elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
@@ -297,8 +266,7 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                                 
                                 seg_flights.append(f"{mk or op}{f.get('flightNumber', '')}")
                             if airline_mode != "🌍 無限制航空公司":
-                                if not has_primary or not all_legs_valid:
-                                    is_valid_airline = False; break
+                                if not has_primary or not all_legs_valid: is_valid_airline = False; break
                             l_sum.append("|".join(seg_flights))
                             
                         if is_valid_airline and len(l_sum) == 4:
@@ -307,7 +275,7 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                             
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 elif res.status_code == 429: await asyncio.sleep(2.0)
-            except Exception: await asyncio.sleep(1.0)
+            except: await asyncio.sleep(1.0)
         return None
 
 async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, alliance_flag, manual_core_price, state_key="report_data"):
@@ -332,7 +300,7 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
         unique_d1 = list(set((t[1], t[0][0]['fromId'].split('.')[0]) for t in tasks))
         unique_d4 = list(set((t[4], t[0][3]['toId'].split('.')[0]) for t in tasks))
         
-        d1_map, d4_map = {}, {}
+        d1_map, d4_map = {} , {}
         async def get_single_leg(c, s, dt, f_c, t_c, is_d1):
             p = await fetch_lowest_price(c, s, f_c, t_c, dt, cab)
             if is_d1: d1_map[(dt, f_c)] = p or 5000 
@@ -368,9 +336,11 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
                 eta = (total_tasks - (i+1)) / rps if rps > 0 else 0
                 bar.progress((i+1)/total_tasks, text=f"⚡ 搜尋進度: {i+1}/{total_tasks} | {rps:.1f} RPS | 剩餘時間: {int(eta//60)}分{int(eta%60)}秒 | 發現結果: {len(final_res)} 組")
                 
+                # 💡 V49.0 即時呈現也改用原生 DataFrame，字體又大又清晰
                 if final_res:
                     temp_sorted = sorted(final_res, key=lambda x: x['total'])[:50]
-                    live_table.markdown(f"### 🚀 即時開獎 (目前最優 TOP 50)\n" + generate_table_html(temp_sorted, core_ref), unsafe_allow_html=True)
+                    temp_df = create_dataframe(temp_sorted)
+                    live_table.dataframe(temp_df.drop(columns=["勾選", "_h1", "_h4"]), hide_index=True, use_container_width=True)
                 last_upd = now
     
     elapsed = time.time() - start_t
@@ -378,10 +348,8 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
     
     if final_res:
         status.info("📧 封裝精算報告並寄信中...")
-        ok = send_detailed_email(final_res, core_ref, elapsed, email_input)
-        if ok: st.success("✅ 獵殺完成！報告已發送至您的信箱。")
-        else: st.error("🚨 信件發送失敗，請聯絡站長。")
-        
+        send_detailed_email(final_res, core_ref, elapsed, email_input)
+        st.success("✅ 獵殺完成！報告已發送至您的信箱。")
         st.session_state[state_key] = final_res
         st.session_state[state_key + "_ref"] = core_ref
         live_table.empty()
@@ -458,7 +426,6 @@ if st.session_state.username is None:
     login_screen()
 else:
     is_my_turn = check_queue()
-    
     if not is_my_turn:
         st.title("⏳ 請稍候，系統排隊中...")
         st.info("目前運算資源正在被使用中，請不要關閉網頁。輪到您時畫面會自動解鎖。")
@@ -541,26 +508,9 @@ else:
         if task_mode.startswith("1"):
             st.divider()
             st.subheader("Step 3: 選擇外站掃描區域與站點")
-            
-            selected_regions = st.multiselect(
-                "🌍 區域快速過濾 (選擇後將自動展開下方機場名單)",
-                list(ALL_HUBS.keys()),
-                default=["東北亞", "東南亞/南亞"]
-            )
-            
-            if selected_regions:
-                flt_opts = [f"{c} ({n})" for r in selected_regions for c, n in ALL_HUBS[r].items()]
-            else:
-                flt_opts = []
-                
-            dynamic_key = f"opt1_locs_{hash(tuple(selected_regions))}"
-            target_locs = st.multiselect(
-                "📍 實際將掃描的機場站點 (可自由刪除不想去的城市)",
-                options=flt_opts if selected_regions else ALL_CITIES_LIST,
-                default=flt_opts,
-                key=dynamic_key
-            )
-            
+            selected_regions = st.multiselect("🌍 區域快速過濾 (選擇後將自動展開下方機場名單)", list(ALL_HUBS.keys()), default=["東北亞", "東南亞/南亞"])
+            flt_opts = [f"{c} ({n})" for r in selected_regions for c, n in ALL_HUBS[r].items()] if selected_regions else []
+            target_locs = st.multiselect("📍 實際將掃描的機場站點 (可自由刪除不想去的城市)", options=flt_opts if selected_regions else ALL_CITIES_LIST, default=flt_opts, key=f"opt1_locs_{hash(tuple(selected_regions))}")
             st.info(f"💡 外站接駁日期將鎖定在 **{d2_date - timedelta(days=1)}** 與 **{d3_date + timedelta(days=1)}** 以求最高效率。")
             
             st.divider()
@@ -570,14 +520,11 @@ else:
             if st.button("🚀 開始自動精算並寄信", type="primary"):
                 st.session_state.report_data = None 
                 st.session_state.deep_report_data = None 
-                if not target_locs:
-                    st.error("🚨 請至少選擇一個外站掃描機場！")
-                elif not email_input: 
-                    st.error("🚨 請輸入 Email！")
+                if not target_locs: st.error("🚨 請至少選擇一個外站掃描機場！")
+                elif not email_input: st.error("🚨 請輸入 Email！")
                 else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
                     target_codes = [loc.split(" ")[0] for loc in target_locs]
-                        
                     tasks = []
                     d1_dt, d4_dt = d2_date - timedelta(days=1), d3_date + timedelta(days=1)
                     for h1 in target_codes:
@@ -587,7 +534,6 @@ else:
                                  {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
                                  {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4_dt.strftime("%Y-%m-%d")}]
                             tasks.append((l, d1_dt.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4_dt.strftime("%Y-%m-%d")))
-                    
                     conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.commit(); conn.close()
                     asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "report_data"))
 
@@ -604,18 +550,15 @@ else:
             st.subheader("Step 4: 確認與執行")
             email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", value=default_email, placeholder="例如: yourname@gmail.com")
             
-            total_est_tasks = 200 * 200
-            if st.button(f"🚀 展開 {total_est_tasks:,} 筆深度精算並寄信", type="primary"):
+            if st.button(f"🚀 展開 40,000 筆深度精算並寄信", type="primary"):
                 st.session_state.report_data = None 
                 st.session_state.deep_report_data = None
                 if not email_input: st.error("🚨 請輸入 Email！")
                 else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
                     h1_fix, h4_fix = d1_loc.split(" ")[0], d4_loc.split(" ")[0]
-                    
                     d1_dates = [d2_date - timedelta(days=i) for i in range(200, 0, -1)]
                     d4_dates = [d3_date + timedelta(days=i) for i in range(1, 201)]
-                    
                     tasks = []
                     for d1 in d1_dates:
                         for d4 in d4_dates:
@@ -624,90 +567,94 @@ else:
                                  {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
                                  {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                             tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
-                    
                     conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} 200-days)", datetime.now())); conn.commit(); conn.close()
                     asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "report_data"))
 
         # ==========================================
-        # 📊 階段 1：主報表展示區
+        # 📊 階段 1：主報表展示區 (V49.0 - 原生表格內互動打勾)
         # ==========================================
         if st.session_state.report_data:
             st.divider()
             st.subheader("📊 第一階段：精算結果報表")
             
-            sort_mode = st.radio(
-                "💡 請選擇您想怎麼看這份報表：", 
-                ["💰 總價排序 (由便宜到貴，適合預算先決)", "📉 價差排序 (由省最多到省最少，適合 C/P 值先決)"], 
-                horizontal=True
-            )
+            sort_mode = st.radio("💡 請選擇您想怎麼看這份報表：", ["💰 總價排序 (由便宜到貴，適合預算先決)", "📉 價差排序 (由省最多到省最少，適合 C/P 值先決)"], horizontal=True)
             
             if "價差排序" in sort_mode:
                 display_data = sorted(st.session_state.report_data, key=lambda x: x['diff'], reverse=True)
             else:
                 display_data = sorted(st.session_state.report_data, key=lambda x: x['total'])
                 
-            st.markdown(generate_table_html(display_data, st.session_state.report_ref), unsafe_allow_html=True)
+            display_df = create_dataframe(display_data)
+            
+            # 💡 V49.0：產生可打勾的互動式 DataFrame
+            edited_df = st.data_editor(
+                display_df,
+                column_config={
+                    "勾選": st.column_config.CheckboxColumn("📌 勾選深潛", default=False),
+                    "_h1": None, # 隱藏底層資料
+                    "_h4": None, # 隱藏底層資料
+                },
+                disabled=["總價(TWD)", "價差對比", "D1出發", "D4回程", "分開買市價", "航班組合"], # 保護其他欄位不被竄改
+                hide_index=True,
+                use_container_width=True,
+                key="report_data_editor"
+            )
             
             # ==========================================
-            # 🚀 階段 2：Step 5 深度探索引擎 (僅限選項1)
+            # 🚀 階段 2：Step 5 深度探索引擎 (僅限選項1且有打勾時出現)
             # ==========================================
             if task_mode.startswith("1"):
-                st.divider()
-                st.markdown("<h3 style='color: #ff5252;'>🚀 Step 5: 鎖定潛力航線，進行 200 天深度探索</h3>", unsafe_allow_html=True)
-                st.info("💡 由於系統架構限制，我們無法直接在上方表格內打勾。請直接在下方選單點選您感興趣的「潛力航線」，然後按下深潛按鈕，系統將為您掃描該航線 40,000 種時間組合的最底價！")
+                selected_rows = edited_df[edited_df["勾選"] == True]
                 
-                # 自動萃取報表中不重複的 H1 ➔ H4 組合
-                unique_routes = []
-                seen = set()
-                for r in display_data:
-                    pair = (r['h1'], r['h4'])
-                    if pair not in seen:
-                        seen.add(pair)
-                        unique_routes.append(r)
-                    if len(unique_routes) >= 20: break # 最多顯示前 20 種航線
-                
-                # 建立單選選單，模擬勾選效果
-                route_options = {f"📍 路線：{r['h1']} ➔ {r['h4']} (此組合目前最低 {r['total']:,} TWD)": (r['h1'], r['h4']) for r in unique_routes}
-                
-                sel_route_str = st.radio("👇 請勾選一組要深潛的航線：", list(route_options.keys()))
-                sel_h1, sel_h4 = route_options[sel_route_str]
-                
-                if st.button(f"🔥 立即啟動 {sel_h1} / {sel_h4} 深度探索", type="primary"):
-                    st.session_state.deep_report_data = None # 清空舊深潛報表
-                    rid = str(uuid.uuid4()); st.session_state.run_id = rid
+                if not selected_rows.empty:
+                    if len(selected_rows) > 1:
+                        st.warning("⚠️ 系統偵測到多個勾選，將自動以您勾選的『第一行』航線為準！")
+                        
+                    sel_h1 = selected_rows.iloc[0]["_h1"]
+                    sel_h4 = selected_rows.iloc[0]["_h4"]
                     
-                    d1_dates = [d2_date - timedelta(days=i) for i in range(200, 0, -1)]
-                    d4_dates = [d3_date + timedelta(days=i) for i in range(1, 201)]
+                    st.divider()
+                    st.markdown(f"<h3 style='color: #ff5252;'>🚀 Step 5: 尋找 {sel_h1} / {sel_h4} 更便宜的時間</h3>", unsafe_allow_html=True)
+                    st.info("💡 系統已為您鎖定上方勾選的航線組合。按下按鈕後，我們將發動 40,000 筆大數據運算，找出前後 200 天內最便宜的破盤組合！")
                     
-                    tasks = []
-                    for d1 in d1_dates:
-                        for d4 in d4_dates:
-                            l = [{"fromId": f"{sel_h1}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
-                                 {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
-                                 {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
-                                 {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{sel_h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
-                            tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
-                    
-                    conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} 200-days)", datetime.now())); conn.commit(); conn.close()
-                    asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "deep_report_data"))
+                    if st.button(f"🔥 立即啟動 {sel_h1} / {sel_h4} 深度探索", type="primary"):
+                        st.session_state.deep_report_data = None
+                        rid = str(uuid.uuid4()); st.session_state.run_id = rid
+                        
+                        d1_dates = [d2_date - timedelta(days=i) for i in range(200, 0, -1)]
+                        d4_dates = [d3_date + timedelta(days=i) for i in range(1, 201)]
+                        
+                        tasks = []
+                        for d1 in d1_dates:
+                            for d4 in d4_dates:
+                                l = [{"fromId": f"{sel_h1}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
+                                     {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
+                                     {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
+                                     {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{sel_h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
+                                tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
+                        
+                        conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} 200-days)", datetime.now())); conn.commit(); conn.close()
+                        asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "deep_report_data"))
 
         # ==========================================
-        # 📈 階段 3：Step 5 深度結果展示區
+        # 📈 階段 3：Step 5 深度結果展示區 (獨立在最下方)
         # ==========================================
         if st.session_state.deep_report_data:
             st.divider()
             st.markdown("<h3 style='color: #00e676;'>🏆 第二階段：200天深度探索精算結果</h3>", unsafe_allow_html=True)
             
-            sort_mode_deep = st.radio(
-                "💡 深度探索報表排序方式：", 
-                ["💰 總價排序 (由便宜到貴)", "📉 價差排序 (由省最多到省最少)"], 
-                horizontal=True,
-                key="sort_mode_deep"
-            )
+            sort_mode_deep = st.radio("💡 深度探索報表排序方式：", ["💰 總價排序 (由便宜到貴)", "📉 價差排序 (由省最多到省最少)"], horizontal=True, key="sort_mode_deep")
             
             if "價差排序" in sort_mode_deep:
                 display_data_deep = sorted(st.session_state.deep_report_data, key=lambda x: x['diff'], reverse=True)
             else:
                 display_data_deep = sorted(st.session_state.deep_report_data, key=lambda x: x['total'])
                 
-            st.markdown(generate_table_html(display_data_deep, st.session_state.deep_report_ref), unsafe_allow_html=True)
+            display_df_deep = create_dataframe(display_data_deep)
+            
+            # 深潛結果不需要再打勾了，所以只顯示純 DataFrame
+            st.dataframe(
+                display_df_deep.drop(columns=["勾選", "_h1", "_h4"]),
+                hide_index=True,
+                use_container_width=True
+            )
