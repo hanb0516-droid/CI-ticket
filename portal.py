@@ -7,6 +7,7 @@ import uuid
 import smtplib
 import sqlite3
 import pandas as pd
+import random
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, date
@@ -15,7 +16,8 @@ from itertools import product
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary | 外站機票精算系統", page_icon="✈️", layout="wide")
+# 💡 將版本號加上去！
+st.set_page_config(page_title="Flight Actuary v46.7 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
@@ -33,8 +35,7 @@ if "run_id" not in st.session_state: st.session_state.run_id = None
 if "valid_offers" not in st.session_state: st.session_state.valid_offers = []
 
 try:
-    # 💡 乖乖切回單一付費 API KEY
-    API_KEY = st.secrets["BOOKING_API_KEY"]
+    API_KEYS_LIST = [k.strip() for k in st.secrets["BOOKING_API_KEY"].split(",") if k.strip()]
     S_SENDER = st.secrets.get("EMAIL_SENDER", "")
     S_PWD = st.secrets.get("EMAIL_PASSWORD", "")
     S_RECEIVER = st.secrets.get("EMAIL_RECEIVER", "")
@@ -53,7 +54,7 @@ def get_hubs():
         "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光", "DEL": "新德里", "BOM": "孟買"},
         "中東/非洲": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "AUH": "阿布達比", "CAI": "開羅", "JNB": "約翰尼斯堡"},
         "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都柏林"},
-        "東歐/南歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬اديم", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典"},
+        "東歐/南歐": {"PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典"},
         "美西": {"LAX": "洛杉磯", "SFO": "舊金山", "ONT": "安大略", "SEA": "西雅圖", "YVR": "溫哥華", "LAS": "拉斯維加斯", "DEN": "丹佛", "HNL": "檀香山", "PHX": "鳳凰城", "SLC": "鹽湖城"},
         "美東/中部": {"JFK": "紐約甘迺迪", "EWR": "紐華克", "ORD": "芝加哥", "IAH": "休士頓", "YYZ": "多倫多", "DFW": "達拉斯", "MCO": "奧蘭多", "MIA": "邁阿密", "BOS": "波士頓", "ATL": "亞特蘭大", "IAD": "華盛頓", "DTW": "底特律", "MSP": "明尼亞波利斯"},
         "南美": {"GRU": "聖保羅", "EZE": "布宜諾斯艾利斯", "SCL": "聖地牙哥"},
@@ -76,24 +77,28 @@ def safe_idx(target):
 # ==========================================
 # 2. 核心搜尋與 Email 引擎
 # ==========================================
-def generate_table_html(res, ref):
-    header = "<tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>比單買主行程省下</th><th>D1 站點/日期</th><th>D4 站點/日期</th><th>探索路線</th><th>D1/D2/D3/D4 航班</th></tr>"
+def generate_table_html(res, core_ref):
+    header = "<tr style='background:#333;color:#fff;'><th>總價(TWD)</th><th>真實分開買對比</th><th>D1 站點/日期</th><th>D4 站點/日期</th><th>探索路線</th><th>D1/D2/D3/D4 航班</th></tr>"
     rows = []
     for r in res[:100]:
-        diff = ref - r['total']
+        diff = r['diff']
         color = "#00e676" if diff >= 0 else "#ff5252"
-        diff_str = f"<span style='color:{color}'><b>{'省' if diff>=0 else '貴'} {abs(diff):,}</b></span>"
+        diff_str = f"<span style='color:{color}; font-size:14px;'><b>{'省' if diff>=0 else '貴'} {abs(diff):,}</b></span>"
+        
+        formula = f"主行程 {core_ref:,} + D1單買 {r['d1_price']:,} + D4單買 {r['d4_price']:,}"
+        ref_str = f"<span style='color:#aaa; font-size:10px;' title='{formula}'>分開買約 {r['ref_price']:,}</span><br>"
+        
         route_str = f"<b>{r['h1']}</b><span style='color:#888;'>➔{r['d2o']} 【 {r['d2o']}➔{r['d2d']} | {r['d3o']}➔{r['d3d']} 】 {r['d3d']}➔</span><b>{r['h4']}</b>"
         f_str = f"<span style='color:#888; font-size:10px;'>{r['legs'][0]}<br>{r['legs'][1]}<br>{r['legs'][2]}<br>{r['legs'][3]}</span>"
         
-        row_html = f"<tr><td>{r['total']:,}</td><td>{diff_str}</td>"
+        row_html = f"<tr><td><b style='font-size:14px;'>{r['total']:,}</b></td><td>{ref_str}{diff_str}</td>"
         row_html += f"<td><b>{r['h1']} {AIRPORT_MAP.get(r['h1'],'')}</b><br>{r['d1'][5:].replace('-','/')}</td>"
         row_html += f"<td><b>{r['h4']} {AIRPORT_MAP.get(r['h4'],'')}</b><br>{r['d4'][5:].replace('-','/')}</td>"
         row_html += f"<td><span style='font-size:11px;'>{route_str}</span></td><td>{f_str}</td></tr>"
         rows.append(row_html)
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;font-size:12px;'><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
 
-def send_detailed_email(res, ref, elapsed, user_email):
+def send_detailed_email(res, core_ref, elapsed, user_email):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     msg = MIMEMultipart()
     msg['From'] = S_SENDER
@@ -111,15 +116,15 @@ def send_detailed_email(res, ref, elapsed, user_email):
 
     cheapest = res[0]['total']
     subj_focus = f"{res[0]['d2o']}➔{res[0]['d2d']}({res[0]['d2']}) / {res[0]['d3o']}➔{res[0]['d3d']}({res[0]['d3']})"
-    msg['Subject'] = f"✈️ [自動精算] {subj_focus} 最佳外站票報告 (最低 {cheapest:,} TWD)"
+    msg['Subject'] = f"✈️ [真實對比] {subj_focus} 最佳外站票報告 (最低 {cheapest:,} TWD)"
         
     header = f"<div style='background:#2c3e50; color:#fff; padding:15px;'><h2>Flight Actuary 外站機票精算報告</h2><p>時間：{now_str}</p></div>"
     stats_content = f"<b>⏱️ 搜尋總耗時：</b> {elapsed:.2f} 秒<br>"
-    stats_content += f"<b>💎 單買主行程參考市價：</b> {ref:,} TWD<br>"
+    stats_content += f"<b>💎 核心主行程單買：</b> {core_ref:,} TWD (未含D1/D4票價)<br>"
     stats_content += f"<b>🏆 尋獲結果：</b> {len(res)} 組"
     
     stats_html = f"<div style='background:#f8f9fa; padding:10px; border-left:4px solid #00e676; margin-bottom:15px; color:#333;'>{stats_content}</div>"
-    body = f"{header}{stats_html}<h3>📋 票價排行榜 (Top 100)</h3>{generate_table_html(res, ref)}"
+    body = f"{header}{stats_html}<h3>📋 票價排行榜 (Top 100)</h3>{generate_table_html(res, core_ref)}"
     msg.attach(MIMEText(f"<html><body>{body}</body></html>", 'html', 'utf-8'))
     
     try:
@@ -129,19 +134,34 @@ def send_detailed_email(res, ref, elapsed, user_email):
     except Exception:
         return False
 
+async def fetch_lowest_price(client, sem, f_code, t_code, date_str, cab):
+    legs = [{"fromId": f"{f_code}.AIRPORT", "toId": f"{t_code}.AIRPORT", "date": date_str}]
+    url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
+    async with sem:
+        for _ in range(2):
+            try:
+                headers = {"x-rapidapi-key": random.choice(API_KEYS_LIST), "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
+                res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cab, "adults": "1", "currency_code": "TWD"}, timeout=30.0)
+                if res.status_code == 200:
+                    offers = res.json().get('data', {}).get('flightOffers', [])
+                    if offers:
+                        return min([o.get('priceBreakdown', {}).get('total', {}).get('units', 0) for o in offers])
+            except: pass
+    return None
+
 async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, alliance_flag):
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
-    headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
-    
     SKYTEAM_CODES = {"CI", "AF", "KL", "DL", "KE", "MU", "MF", "VN", "GA", "AM", "AR", "UX", "KQ", "ME", "SV", "RO", "VS", "SK", "AZ"}
     STAR_ALLIANCE_CODES = {"BR", "UA", "AC", "LH", "LX", "OS", "SN", "NH", "OZ", "SQ", "TG", "CA", "ZH", "NZ", "LO", "TK", "MS", "SA", "ET", "CM", "AV", "TP", "A3", "AI"}
     CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
     CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
+    EK_PRIMARY, EK_INTERLINE = {"EK"}, {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
     async with sem:
         for _ in range(2):
             try:
+                headers = {"x-rapidapi-key": random.choice(API_KEYS_LIST), "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
                 res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cab, "adults": "1", "currency_code": "TWD"}, timeout=35.0)
                 if res.status_code == 200:
                     offers = res.json().get('data', {}).get('flightOffers', [])
@@ -161,6 +181,9 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                                         primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
                                         if op in primaries or mk in primaries: has_primary = True
                                         elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                    elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
+                                        if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
+                                        elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
                                 
                                 if airline_mode != "🌍 無限制航空公司":
                                     if not has_primary or not all_legs_valid:
@@ -168,7 +191,6 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                                         break
                             if is_valid_airline:
                                 valid.append({"total": o.get('priceBreakdown', {}).get('total', {}).get('units', 0)})
-                        
                         if valid:
                             return sorted(valid, key=lambda x: x['total'])[0]['total'], f"{airline_mode} 聯程市價"
             except Exception: pass
@@ -176,33 +198,34 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
     if airline_mode != "🌍 無限制航空公司":
         async with sem:
             try:
+                headers = {"x-rapidapi-key": random.choice(API_KEYS_LIST), "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
                 res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cab, "adults": "1", "currency_code": "TWD"}, timeout=35.0)
                 if res.status_code == 200:
                     offers = res.json().get('data', {}).get('flightOffers', [])
                     if offers:
                         cheapest = min([o.get('priceBreakdown', {}).get('total', {}).get('units', 0) for o in offers])
-                        return cheapest, "全市場最便宜市價 (指定航空聯程未公開)"
+                        return cheapest, "全市場最便宜市價"
             except Exception: pass
             
-    return 150000, "系統安全預設值"
+    return 150000, "安全預設值"
 
 async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_flag):
     if st.session_state.run_id != rid: return None
     legs, d1, d2, d3, d4 = task_data
     h1, d2o, d2d, d3o, d3d, h4 = legs[0]['fromId'].split('.')[0], legs[0]['toId'].split('.')[0], legs[1]['toId'].split('.')[0], legs[2]['fromId'].split('.')[0], legs[2]['toId'].split('.')[0], legs[3]['toId'].split('.')[0]
-    
     url = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlightsMultiStops"
-    headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
     
     SKYTEAM_CODES = {"CI", "AF", "KL", "DL", "KE", "MU", "MF", "VN", "GA", "AM", "AR", "UX", "KQ", "ME", "SV", "RO", "VS", "SK", "AZ"}
     STAR_ALLIANCE_CODES = {"BR", "UA", "AC", "LH", "LX", "OS", "SN", "NH", "OZ", "SQ", "TG", "CA", "ZH", "NZ", "LO", "TK", "MS", "SA", "ET", "CM", "AV", "TP", "A3", "AI"}
     CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
     CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
+    EK_PRIMARY, EK_INTERLINE = {"EK"}, {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
     async with sem:
         for _ in range(2):
             try:
+                headers = {"x-rapidapi-key": random.choice(API_KEYS_LIST), "x-rapidapi-host": "booking-com15.p.rapidapi.com"}
                 res = await client.get(url, headers=headers, params={"legs": json.dumps(legs), "cabinClass": cab, "adults": "1", "currency_code": "TWD"}, timeout=35.0)
                 if res.status_code == 200:
                     offers = res.json().get('data', {}).get('flightOffers', [])
@@ -214,31 +237,29 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                         for seg_idx, seg in enumerate(o.get('segments', [])):
                             seg_flights = []
                             has_primary, all_legs_valid = False, True
-                            
                             for leg in seg.get('legs', []):
                                 f = leg.get('flightInfo', {})
                                 op, mk = f.get('carrierInfo', {}).get('operatingCarrier', ''), f.get('carrierInfo', {}).get('marketingCarrier', '')
-                                
                                 if airline_mode == "🌸 華航限定 (直營/聯營)":
                                     primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
                                     if op in primaries or mk in primaries: has_primary = True
                                     else:
                                         if seg_idx in [0, 3] and not alliance_flag: all_legs_valid = False
                                         elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
-
                                 elif airline_mode == "🌳 長榮限定 (直營/聯營)":
                                     primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
                                     if op in primaries or mk in primaries: has_primary = True
                                     else:
                                         if seg_idx in [0, 3] and not alliance_flag: all_legs_valid = False
                                         elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
+                                    if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
+                                    elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
                                 
                                 seg_flights.append(f"{mk or op}{f.get('flightNumber', '')}")
-                            
                             if airline_mode != "🌍 無限制航空公司":
                                 if not has_primary or not all_legs_valid:
                                     is_valid_airline = False; break
-                                    
                             l_sum.append("|".join(seg_flights))
                             
                         if is_valid_airline and len(l_sum) == 4:
@@ -247,9 +268,7 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                             
                     return sorted(valid, key=lambda x: x['total'])[0] if valid else None
                 elif res.status_code == 429: await asyncio.sleep(2.0)
-                else: await asyncio.sleep(1.0)
-            except Exception:
-                await asyncio.sleep(1.0)
+            except Exception: await asyncio.sleep(1.0)
         return None
 
 async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, alliance_flag, manual_core_price):
@@ -257,18 +276,40 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
     bar, status, live_table = st.progress(0), st.empty(), st.empty()
     final_res = []
     
+    d2o_fix, d3d_fix = l_bbb[0]['fromId'].split('.')[0], l_bbb[1]['toId'].split('.')[0]
+    
     limits = httpx.Limits(max_connections=500, max_keepalive_connections=500)
     async with httpx.AsyncClient(limits=limits, timeout=40.0) as client:
         sem = asyncio.Semaphore(500)
         
+        # === Step A: 計算核心主行程基準 ===
         if manual_core_price > 0:
             core_ref = manual_core_price
-            status.info(f"🎯 鎖定！使用您輸入的市價：{core_ref:,} TWD 作為基準。正式展開比價雷達...")
+            status.info(f"🎯 暖機中：使用您輸入的市價 {core_ref:,} TWD 作為核心基準。")
         else:
             status.info("🎯 暖機中：正在自動取得主行程市價...")
             core_ref, core_type = await fetch_core_price_intelligent(client, sem, l_bbb, cab, airline_mode, alliance_flag)
-            status.info(f"🎯 鎖定！系統自動查得主行程單買基準為：{core_ref:,} TWD ({core_type})。正式展開比價雷達...")
+            status.info(f"🎯 暖機中：自動查得主行程單買基準為 {core_ref:,} TWD ({core_type})。")
                 
+        # === Step B: 獨立提取 D1/D4 實時票價 ===
+        unique_d1 = list(set((t[1], t[0][0]['fromId'].split('.')[0]) for t in tasks))
+        unique_d4 = list(set((t[4], t[0][3]['toId'].split('.')[0]) for t in tasks))
+        
+        d1_map, d4_map = {}, {}
+        async def get_single_leg(c, s, dt, f_c, t_c, is_d1):
+            p = await fetch_lowest_price(c, s, f_c, t_c, dt, cab)
+            if is_d1: d1_map[(dt, f_c)] = p or 5000  # 找不到時的保底估算
+            else: d4_map[(dt, t_c)] = p or 5000
+            
+        coros_d = []
+        for d_dt, h_code in unique_d1: coros_d.append(get_single_leg(client, sem, d_dt, h_code, d2o_fix, True))
+        for d_dt, h_code in unique_d4: coros_d.append(get_single_leg(client, sem, d_dt, d3d_fix, h_code, False))
+        
+        status.info(f"🎯 正在建立「真實對比基準」：額外計算 {len(unique_d1)+len(unique_d4)} 組外站單買市價...")
+        await asyncio.gather(*coros_d)
+        
+        # === Step C: 展開主線 4 段票掃描 ===
+        status.info(f"🎯 真實對比公式建立完畢！正式展開四段票雷達比價...")
         start_t, last_upd = time.time(), 0
         coros = [fetch_api(client, sem, t, rid, cab, airline_mode, alliance_flag) for t in tasks]
         
@@ -276,13 +317,19 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
             if st.session_state.run_id != rid: return
             r = await coro
             
-            if r: final_res.append(r)
+            if r: 
+                d1_price = d1_map.get((r['d1'], r['h1']), 5000)
+                d4_price = d4_map.get((r['d4'], r['h4']), 5000)
+                r['d1_price'] = d1_price
+                r['d4_price'] = d4_price
+                r['ref_price'] = core_ref + d1_price + d4_price
+                r['diff'] = r['ref_price'] - r['total']
+                final_res.append(r)
                 
             now = time.time()
             if now - last_upd >= 2.0 or i == total_tasks - 1:
                 rps = (i+1)/(now - start_t) if (now - start_t) > 0 else 0
                 eta = (total_tasks - (i+1)) / rps if rps > 0 else 0
-                
                 bar.progress((i+1)/total_tasks, text=f"⚡ 搜尋進度: {i+1}/{total_tasks} | {rps:.1f} RPS | 剩餘時間: {int(eta//60)}分{int(eta%60)}秒 | 發現結果: {len(final_res)} 組")
                 
                 if final_res:
@@ -420,8 +467,8 @@ else:
         
     with col_right:
         st.subheader("⚙️ 偏好設定")
-        cab = st.selectbox("艙等", ["BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"])
-        airline_filter = st.selectbox("✈️ 航空公司過濾", ["🌸 華航限定 (直營/聯營)", "🌳 長榮限定 (直營/聯營)", "🌍 無限制航空公司"], index=0)
+        cab = st.selectbox("艙等", ["FIRST", "BUSINESS", "PREMIUM_ECONOMY", "ECONOMY"], index=1)
+        airline_filter = st.selectbox("✈️ 航空公司過濾", ["🌸 華航限定 (直營/聯營)", "🌳 長榮限定 (直營/聯營)", "🇦🇪 阿聯酋航空限定 (Emirates)", "🌍 無限制航空公司"], index=0)
         
         alliance_inc = False
         if "華航" in airline_filter:
@@ -509,7 +556,6 @@ else:
             d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
             d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
             
-            # 💡 新增：使用者可控範圍拉桿，保護 API 額度
             search_range = st.slider("📅 前後掃描範圍 (天數)：", min_value=7, max_value=90, value=30, step=1, 
                                      help="數值越大，產生的 API 費用越高，掃描時間也越長。請謹慎選擇。")
 
@@ -526,7 +572,6 @@ else:
                     rid = str(uuid.uuid4()); st.session_state.run_id = rid
                     h1_fix, h4_fix = d1_loc.split(" ")[0], d4_loc.split(" ")[0]
                     
-                    # 💡 依照拉桿數值動態推算日期
                     d1_dates = [d2_date - timedelta(days=i) for i in range(search_range, 0, -1)]
                     d4_dates = [d3_date + timedelta(days=i) for i in range(1, search_range + 1)]
                     
