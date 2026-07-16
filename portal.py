@@ -16,7 +16,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v51.1 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v52.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
@@ -36,6 +36,8 @@ if "report_data" not in st.session_state: st.session_state.report_data = None
 if "report_ref" not in st.session_state: st.session_state.report_ref = 0
 if "deep_report_data" not in st.session_state: st.session_state.deep_report_data = None
 if "deep_report_ref" not in st.session_state: st.session_state.deep_report_ref = 0
+# 💡 V52.0 新增：用來觸發「消除殘影」的快取狀態
+if "search_params" not in st.session_state: st.session_state.search_params = None
 
 try:
     API_KEYS_LIST = [k.strip() for k in st.secrets["BOOKING_API_KEY"].split(",") if k.strip()]
@@ -73,9 +75,13 @@ def safe_idx(target):
         if s.startswith(target): return i
     return 0
 
+def get_full_name(code):
+    return f"{code} {AIRPORT_MAP.get(code, '')}".strip()
+
 # ==========================================
 # 2. 核心搜尋與 DataFrame 轉換
 # ==========================================
+# 💡 V52.0 修改：支援全中英文對照與新版欄位順序
 def create_dataframe(res):
     if not res: return pd.DataFrame()
     df_data = []
@@ -88,10 +94,17 @@ def create_dataframe(res):
         d3_short = r['d3'][5:].replace('-','/')
         d4_short = r['d4'][5:].replace('-','/')
         
-        d1_str = f"({d1_short}) {r['h1']} ➔ {r['d2o']}"
-        d23_str = f"({d2_short}) {r['d2o']} ➔ {r['d2d']} | ({d3_short}) {r['d3o']} ➔ {r['d3d']}"
-        d4_str = f"({d4_short}) {r['d3d']} ➔ {r['h4']}"
-        route_pure = f"{r['h1']} ➔ {r['d2o']} ➔ {r['d2d']} ➔ {r['d3d']} ➔ {r['h4']}"
+        h1_f = get_full_name(r['h1'])
+        d2o_f = get_full_name(r['d2o'])
+        d2d_f = get_full_name(r['d2d'])
+        d3o_f = get_full_name(r['d3o'])
+        d3d_f = get_full_name(r['d3d'])
+        h4_f = get_full_name(r['h4'])
+
+        d1_str = f"({d1_short}) {h1_f} ➔ {d2o_f}"
+        d23_str = f"({d2_short}) {d2o_f} ➔ {d2d_f} | ({d3_short}) {d3o_f} ➔ {d3d_f}"
+        d4_str = f"({d4_short}) {d3d_f} ➔ {h4_f}"
+        route_pure = f"{h1_f} ➔ {d2o_f} ➔ {d2d_f} ➔ {d3d_f} ➔ {h4_f}"
 
         df_data.append({
             "勾選": False,
@@ -99,8 +112,8 @@ def create_dataframe(res):
             "分開買市價": f"{int(r['ref_price']):,}",
             "價差對比": diff_str,
             "D1 外站回台": d1_str,
-            "D2/D3 核心旅程": d23_str,
             "D4 外站離台": d4_str,
+            "D2/D3 核心旅程": d23_str,
             "航班組合": " | ".join(r['legs']),
             "_h1": r['h1'],
             "_h4": r['h4'],
@@ -109,7 +122,7 @@ def create_dataframe(res):
     return pd.DataFrame(df_data)
 
 def generate_table_html(res, core_ref):
-    header = "<tr style='background:#333;color:#fff;font-size:16px;'><th>總價(TWD)</th><th>分開買市價</th><th>價差對比</th><th>D1 外站回台</th><th>D2/D3 核心旅程</th><th>D4 外站離台</th><th>航班組合</th></tr>"
+    header = "<tr style='background:#333;color:#fff;font-size:16px;'><th>總價(TWD)</th><th>分開買市價</th><th>價差對比</th><th>D1 外站回台</th><th>D4 外站離台</th><th>D2/D3 核心旅程</th><th>航班組合</th></tr>"
     rows = []
     for r in res[:100]:
         diff = r['diff']
@@ -121,9 +134,16 @@ def generate_table_html(res, core_ref):
         d3_short = r['d3'][5:].replace('-','/')
         d4_short = r['d4'][5:].replace('-','/')
         
-        d1_str = f"({d1_short}) {r['h1']} ➔ {r['d2o']}"
-        d23_str = f"({d2_short}) {r['d2o']} ➔ {r['d2d']}<br>({d3_short}) {r['d3o']} ➔ {r['d3d']}"
-        d4_str = f"({d4_short}) {r['d3d']} ➔ {r['h4']}"
+        h1_f = get_full_name(r['h1'])
+        d2o_f = get_full_name(r['d2o'])
+        d2d_f = get_full_name(r['d2d'])
+        d3o_f = get_full_name(r['d3o'])
+        d3d_f = get_full_name(r['d3d'])
+        h4_f = get_full_name(r['h4'])
+
+        d1_str = f"({d1_short}) {h1_f} ➔ {d2o_f}"
+        d23_str = f"({d2_short}) {d2o_f} ➔ {d2d_f}<br>({d3_short}) {d3o_f} ➔ {d3d_f}"
+        d4_str = f"({d4_short}) {d3d_f} ➔ {h4_f}"
         
         f_str = f"<span style='color:#666; font-size:12px;'>{r['legs'][0]}<br>{r['legs'][1]}<br>{r['legs'][2]}<br>{r['legs'][3]}</span>"
         
@@ -131,8 +151,8 @@ def generate_table_html(res, core_ref):
         row_html += f"<td style='font-size:14px;color:#888;'>{int(r['ref_price']):,}</td>"
         row_html += f"<td>{diff_str}</td>"
         row_html += f"<td style='font-size:14px;'>{d1_str}</td>"
-        row_html += f"<td style='font-size:14px;'>{d23_str}</td>"
         row_html += f"<td style='font-size:14px;'>{d4_str}</td>"
+        row_html += f"<td style='font-size:14px;'>{d23_str}</td>"
         row_html += f"<td>{f_str}</td></tr>"
         rows.append(row_html)
     return f"<table border='1' style='border-collapse:collapse;width:100%;text-align:center;'><thead>{header}</thead><tbody>{''.join(rows)}</tbody></table>"
@@ -335,7 +355,11 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
         status.info(f"🎯 正在建立「真實對比基準」：額外計算 {len(unique_d1)+len(unique_d4)} 組外站單買市價...")
         await asyncio.gather(*coros_d)
         
-        status.info(f"🎯 基準建立完畢！正式展開雷達比價 (共 {total_tasks:,} 筆組合)...")
+        # 💡 V52.0：加上基於 15 RPS 的保守 ETA 預估
+        est_seconds = int(total_tasks / 15)
+        eta_text = f"約 {est_seconds} 秒" if est_seconds < 60 else f"約 {int(est_seconds//60)} 分 {int(est_seconds%60)} 秒"
+        status.info(f"🎯 基準建立完畢！正式展開雷達比價 (共 {total_tasks:,} 筆組合，預計{eta_text})...")
+        
         start_t, last_upd = time.time(), 0
         coros = [fetch_api(client, sem, t, rid, cab, airline_mode, alliance_flag) for t in tasks]
         
@@ -363,13 +387,14 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
                     temp_df = create_dataframe(temp_sorted)
                     live_table.dataframe(
                         temp_df.drop(columns=["勾選", "_h1", "_h4", "_route_pure"]),
+                        column_order=["總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D4 外站離台", "D2/D3 核心旅程", "航班組合"],
                         column_config={
                             "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
                             "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
                             "價差對比": st.column_config.TextColumn("價差對比", width="small"),
                             "D1 外站回台": st.column_config.TextColumn("D1 外站回台", width="medium"),
-                            "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
                             "D4 外站離台": st.column_config.TextColumn("D4 外站離台", width="medium"),
+                            "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
                             "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
                         },
                         hide_index=True,
@@ -488,6 +513,7 @@ else:
         st.session_state.run_id = None
         st.session_state.report_data = None
         st.session_state.deep_report_data = None
+        st.session_state.search_params = None
         st.rerun()
 
     st.title("🎯 Flight Actuary 外站機票精算系統")
@@ -552,6 +578,7 @@ else:
             st.subheader("Step 4: 確認與執行")
             email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", value=default_email, placeholder="例如: yourname@gmail.com")
             
+            # 💡 V52.0：按鈕不再直接執行，而是觸發 rerun 消除殘影
             if st.button("🚀 開始自動精算並寄信", type="primary"):
                 st.session_state.report_data = None 
                 st.session_state.deep_report_data = None 
@@ -570,7 +597,12 @@ else:
                                  {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4_dt.strftime("%Y-%m-%d")}]
                             tasks.append((l, d1_dt.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4_dt.strftime("%Y-%m-%d")))
                     conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.commit(); conn.close()
-                    asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "report_data"))
+                    
+                    st.session_state.search_params = {
+                        "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
+                        "airline_filter": airline_filter, "alliance_inc": alliance_inc, "manual_core_price": manual_core_price, "state_key": "report_data"
+                    }
+                    st.rerun() # 🚀 強制清洗畫面殘影！
 
         else:
             st.divider()
@@ -582,7 +614,6 @@ else:
             st.info("💡 請設定 D1 (外站回台) 與 D4 (外站離台) 的日期搜尋範圍：")
             col_d1, col_d4 = st.columns(2)
             d1_range = col_d1.date_input("📅 D1 日期範圍", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date)
-            # 💡 V51.1 加上專屬提示
             d4_range = col_d4.date_input("📅 D4 日期範圍", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, help="💡 系統框架原生僅提供『過去(Past)』快捷鍵。請直接點擊日曆上的『起始日』與『結束日』來圈選未來範圍！")
             
             st.divider()
@@ -613,9 +644,27 @@ else:
                                      {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                                 tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
                         conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} custom-range)", datetime.now())); conn.commit(); conn.close()
-                        asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "report_data"))
+                        
+                        # 💡 觸發 rerun
+                        st.session_state.search_params = {
+                            "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
+                            "airline_filter": airline_filter, "alliance_inc": alliance_inc, "manual_core_price": manual_core_price, "state_key": "report_data"
+                        }
+                        st.rerun()
             else:
                 st.warning("⚠️ 請選擇完整的起訖日期區間")
+
+        # ==========================================
+        # ⚡ V52.0：攔截點 - 執行搜尋任務 (確保舊畫面已完全消失)
+        # ==========================================
+        if st.session_state.get("search_params"):
+            p = st.session_state.search_params
+            st.session_state.search_params = None # 清空防止無限迴圈
+            asyncio.run(run_portal_hunt(
+                p["tasks"], p["l_bbb"], p["email_input"], p["rid"],
+                p["cab"], p["airline_filter"], p["alliance_inc"],
+                p["manual_core_price"], p["state_key"]
+            ))
 
         # ==========================================
         # 📊 階段 1：主報表展示區 
@@ -635,21 +684,21 @@ else:
             
             edited_df = st.data_editor(
                 display_df,
-                column_order=["勾選", "總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D2/D3 核心旅程", "D4 外站離台", "航班組合"],
+                column_order=["勾選", "總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D4 外站離台", "D2/D3 核心旅程", "航班組合"],
                 column_config={
                     "勾選": st.column_config.CheckboxColumn("📌 勾選深潛", default=False, width="small"),
                     "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
                     "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
                     "價差對比": st.column_config.TextColumn("價差對比", width="small"),
                     "D1 外站回台": st.column_config.TextColumn("D1 外站回台", width="medium"),
-                    "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
                     "D4 外站離台": st.column_config.TextColumn("D4 外站離台", width="medium"),
+                    "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
                     "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
                     "_h1": None, 
                     "_h4": None, 
                     "_route_pure": None
                 },
-                disabled=["總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D2/D3 核心旅程", "D4 外站離台", "航班組合"], 
+                disabled=["總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D4 外站離台", "D2/D3 核心旅程", "航班組合"], 
                 hide_index=True,
                 use_container_width=True,
                 key="report_data_editor"
@@ -675,7 +724,6 @@ else:
                     st.info("💡 請自訂深潛探索的日期範圍 (系統將為您算出範圍內所有組合的破盤價)：")
                     col_d1, col_d4 = st.columns(2)
                     d1_range_s5 = col_d1.date_input("📅 D1 日期範圍 (外站回台)", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date, key="d1_step5")
-                    # 💡 V51.1 加上專屬提示
                     d4_range_s5 = col_d4.date_input("📅 D4 日期範圍 (外站離台)", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, key="d4_step5", help="💡 系統框架原生僅提供『過去(Past)』快捷鍵。請直接點擊日曆上的『起始日』與『結束日』來圈選未來範圍！")
                     
                     if len(d1_range_s5) == 2 and len(d4_range_s5) == 2:
@@ -700,7 +748,13 @@ else:
                                     tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
                             
                             conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} custom-range)", datetime.now())); conn.commit(); conn.close()
-                            asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "deep_report_data"))
+                            
+                            # 💡 觸發 rerun 洗掉殘影
+                            st.session_state.search_params = {
+                                "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
+                                "airline_filter": airline_filter, "alliance_inc": alliance_inc, "manual_core_price": manual_core_price, "state_key": "deep_report_data"
+                            }
+                            st.rerun()
                     else:
                         st.warning("⚠️ 請選擇完整的起訖日期區間")
 
@@ -722,14 +776,14 @@ else:
             
             st.dataframe(
                 display_df_deep.drop(columns=["勾選", "_h1", "_h4", "_route_pure"]),
-                column_order=["總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D2/D3 核心旅程", "D4 外站離台", "航班組合"],
+                column_order=["總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D4 外站離台", "D2/D3 核心旅程", "航班組合"],
                 column_config={
                     "總價(TWD)": st.column_config.TextColumn("總價(TWD)", width="small"),
                     "分開買市價": st.column_config.TextColumn("分開買市價", width="small"),
                     "價差對比": st.column_config.TextColumn("價差對比", width="small"),
                     "D1 外站回台": st.column_config.TextColumn("D1 外站回台", width="medium"),
-                    "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
                     "D4 外站離台": st.column_config.TextColumn("D4 外站離台", width="medium"),
+                    "D2/D3 核心旅程": st.column_config.TextColumn("D2/D3 核心旅程", width="large"),
                     "航班組合": st.column_config.TextColumn("航班組合", width="medium"),
                 },
                 hide_index=True,
