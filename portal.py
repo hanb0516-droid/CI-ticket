@@ -13,16 +13,25 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, date
 from itertools import product
 
-# 💡 基於 v55.0 架構修改，無 v56.0 更新，版本號直接升級 v57.1！
-st.set_page_config(page_title="Flight Actuary v57.1 | 外站機票精算系統", page_icon="✈️", layout="wide")
+# 💡 安全載入 Fragment 裝飾器 (確保局部渲染，不干擾主搜尋)
+if hasattr(st, "fragment"):
+    fragment_decorator = st.fragment
+elif hasattr(st, "experimental_fragment"):
+    fragment_decorator = st.experimental_fragment
+else:
+    fragment_decorator = lambda f: f
+
+# ==========================================
+# 0. 初始化與排隊資料庫
+# ==========================================
+st.set_page_config(page_title="Flight Actuary v57.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
-    conn = sqlite3.connect('queue.db')
+    conn = sqlite3.connect('queue.db', isolation_level=None)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS queue (username TEXT PRIMARY KEY, status TEXT, start_time REAL, req_time REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, task_type TEXT, timestamp DATETIME)''')
     c.execute('''CREATE TABLE IF NOT EXISTS blacklist (username TEXT PRIMARY KEY)''')
-    conn.commit()
     conn.close()
 
 init_db()
@@ -74,7 +83,7 @@ def safe_idx(target):
     return 0
 
 # ==========================================
-# 2. 核心搜尋與 DataFrame 轉換
+# 2. 核心搜尋與 DataFrame 轉換 (保留 v55.0 經典版面)
 # ==========================================
 def create_dataframe(res):
     if not res: return pd.DataFrame()
@@ -178,6 +187,7 @@ async def fetch_lowest_price(client, sem, f_code, t_code, date_str, cab):
             except: pass
     return None
 
+# 💡 V57.0：精準血統淨化器 (D1/D4 嚴格，D2/D3 彈性連程)
 async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, alliance_flag):
     url_rt = "https://booking-com15.p.rapidapi.com/api/v1/flights/searchFlights"
     params_rt = {"fromId": legs[0]['fromId'], "toId": legs[0]['toId'], "departDate": legs[0]['date'], "returnDate": legs[1]['date'], "adults": "1", "cabinClass": cab, "currency_code": "TWD"}
@@ -208,15 +218,19 @@ async def fetch_core_price_intelligent(client, sem, legs, cab, airline_mode, all
                                     has_primary, all_legs_valid = False, True
                                     for leg in seg.get('legs', []):
                                         op, mk = leg.get('flightInfo', {}).get('carrierInfo', {}).get('operatingCarrier', ''), leg.get('flightInfo', {}).get('carrierInfo', {}).get('marketingCarrier', '')
+                                        
                                         if airline_mode == "🌸 華航限定 (直營/聯營)":
-                                            if op in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY) or mk in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY): has_primary = True
-                                            elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
+                                            primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
+                                            if op in primaries or mk in primaries: has_primary = True
+                                            if op not in primaries and mk not in primaries and op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
                                         elif airline_mode == "🌳 長榮限定 (直營/聯營)":
-                                            if op in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY) or mk in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY): has_primary = True
-                                            elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                            primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
+                                            if op in primaries or mk in primaries: has_primary = True
+                                            if op not in primaries and mk not in primaries and op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
                                         elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
                                             if op in EK_PRIMARY or mk in EK_PRIMARY: has_primary = True
-                                            elif op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
+                                            if op not in EK_PRIMARY and mk not in EK_PRIMARY and op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
+                                            
                                     if airline_mode != "🌍 無限制航空公司":
                                         if not has_primary or not all_legs_valid: is_valid_airline = False; break
                                 if is_valid_airline: valid.append({"total": o.get('priceBreakdown', {}).get('total', {}).get('units', 0)})
@@ -259,7 +273,7 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
     BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
     EK_PRIMARY, EK_INTERLINE = {"EK"}, {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
 
-    async def _fetch_and_parse(u, p, is_multi=False):
+    async def fetch_with_retry():
         async with sem:
             for _ in range(2):
                 try:
@@ -277,30 +291,47 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                                 has_primary, all_legs_valid = False, True
                                 for leg in seg.get('legs', []):
                                     f = leg.get('flightInfo', {})
-                                    op, mk = f.get('carrierInfo', {}).get('operatingCarrier', ''), f.get('carrierInfo', {}).get('marketingCarrier', '')
+                                    op = f.get('carrierInfo', {}).get('operatingCarrier', '')
+                                    mk = f.get('carrierInfo', {}).get('marketingCarrier', '')
+                                    flight_num = f.get('flightNumber', '')
                                     
-                                    # 💡 V57.1 嚴格血統洗滌引擎：防止跨洋大段混入鬼影聯程
+                                    # 💡 V57.0 完美漏斗過濾：D1/D4 絕對純血，D2/D3 彈性聯程
                                     if airline_mode == "🌸 華航限定 (直營/聯營)":
-                                        if seg_idx in [1, 2]: # 精準鎖定核心跨洋段
-                                            primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
-                                            if op not in primaries and mk not in primaries:
-                                                all_legs_valid = False
-                                        else: # 接駁段
-                                            if op in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY) or mk in (SKYTEAM_CODES if alliance_flag else CI_PRIMARY): has_primary = True
-                                            elif op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
+                                        primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
+                                        if op in primaries or mk in primaries: has_primary = True
+                                        if seg_idx in [0, 3]: # D1 & D4: 嚴格拒絕聯營外家
+                                            if op not in primaries and mk not in primaries: all_legs_valid = False
+                                        else: # D2 & D3: 允許合法聯營 (阻絕 BA692 鬼影)
+                                            if op not in primaries and mk not in primaries and op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
                                             
                                     elif airline_mode == "🌳 長榮限定 (直營/聯營)":
-                                        if seg_idx in [1, 2]:
-                                            primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
-                                            if op not in primaries and mk not in primaries:
-                                                all_legs_valid = False
+                                        primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
+                                        if op in primaries or mk in primaries: has_primary = True
+                                        if seg_idx in [0, 3]:
+                                            if op not in primaries and mk not in primaries: all_legs_valid = False
                                         else:
-                                            if op in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY) or mk in (STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY): has_primary = True
-                                            elif op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                            if op not in primaries and mk not in primaries and op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                            
+                                    elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
+                                        primaries = EK_PRIMARY
+                                        if op in primaries or mk in primaries: has_primary = True
+                                        if seg_idx in [0, 3]:
+                                            if op not in primaries and mk not in primaries: all_legs_valid = False
+                                        else:
+                                            if op not in primaries and mk not in primaries and op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
                                     
-                                    # 💡 如果是共享代碼，優先抓營運(實際執飛)代碼還原直營血統
-                                    flight_num = f.get('flightNumber', '')
-                                    display_code = mk if (mk in ["CI", "AE", "BR", "B7"]) else (op if op else mk)
+                                    else:
+                                        primaries = set()
+                                    
+                                    # 💡 洗滌顯示代碼：若為 Codeshare，優先還原本家血統
+                                    display_code = mk
+                                    if airline_mode != "🌍 無限制航空公司":
+                                        if mk in primaries: display_code = mk
+                                        elif op in primaries: display_code = op
+                                        else: display_code = op if op else mk
+                                    else:
+                                        display_code = op if op else mk
+                                        
                                     seg_flights.append(f"{display_code}{flight_num}")
                                     
                                 if airline_mode != "🌍 無限制航空公司":
@@ -315,7 +346,8 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                     elif res.status_code == 429: await asyncio.sleep(2.0)
                 except: await asyncio.sleep(1.0)
             return None
-    return await _fetch_and_parse(url, {})
+            
+    return await fetch_with_retry()
 
 async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, alliance_flag, manual_core_price, state_key="report_data"):
     total_tasks = len(tasks)
@@ -433,7 +465,7 @@ def login_screen():
                     st.session_state.is_admin = True
                     st.rerun()
                 elif user_input.strip():
-                    conn = sqlite3.connect('queue.db')
+                    conn = sqlite3.connect('queue.db', isolation_level=None)
                     c = conn.cursor()
                     
                     c.execute("SELECT * FROM blacklist WHERE username=?", (user_input.strip(),))
@@ -444,7 +476,6 @@ def login_screen():
                     c.execute("SELECT * FROM queue WHERE username=?", (user_input.strip(),))
                     if not c.fetchone():
                         c.execute("INSERT INTO queue (username, status, start_time, req_time) VALUES (?, 'waiting', 0, ?)", (user_input.strip(), time.time()))
-                        conn.commit()
                     conn.close()
                     st.session_state.username = user_input.strip()
                     st.session_state.is_admin = False
@@ -454,7 +485,7 @@ def login_screen():
 
 def check_queue():
     if st.session_state.is_admin: return True
-    conn = sqlite3.connect('queue.db')
+    conn = sqlite3.connect('queue.db', isolation_level=None)
     c = conn.cursor()
     c.execute("SELECT username, start_time FROM queue WHERE status='running'")
     running_user = c.fetchone()
@@ -465,7 +496,6 @@ def check_queue():
         run_name, start_t = running_user
         if time.time() - start_t > 600 and waiting_count > 0: 
             c.execute("DELETE FROM queue WHERE username=?", (run_name,))
-            conn.commit()
             running_user = None
 
     if not running_user and waiting_count > 0:
@@ -474,7 +504,6 @@ def check_queue():
         if next_user_row:
             next_user = next_user_row[0]
             c.execute("UPDATE queue SET status='running', start_time=? WHERE username=?", (time.time(), next_user))
-            conn.commit()
         
     c.execute("SELECT status, start_time FROM queue WHERE username=?", (st.session_state.username,))
     my_status = c.fetchone()
@@ -505,22 +534,52 @@ else:
         st.stop()
         
     if st.session_state.is_admin:
-        with st.sidebar.expander("👑 Admin 控制台", expanded=True):
-            conn = sqlite3.connect('queue.db')
-            st.write("📊 排隊名單：")
-            st.dataframe(pd.read_sql_query("SELECT username, status FROM queue", conn))
+        @fragment_decorator
+        def render_admin_console():
+            st.info("⚠️ 若您正在跑精算，點擊下方按鈕會中斷您的搜尋！(建議開雙分頁來管理)")
+            if st.button("🔄 刷新名單", use_container_width=True): pass
+            
+            conn = sqlite3.connect('queue.db', isolation_level=None)
+            df_q = pd.read_sql_query("SELECT username, status FROM queue", conn)
+            
+            st.write("📊 排隊/執行中名單：")
+            df_placeholder = st.empty()
+            
+            if not df_q.empty:
+                target_user = st.selectbox("🎯 選擇目標", df_q['username'].tolist(), label_visibility="collapsed", key="admin_target")
+                col_k, col_b = st.columns(2)
+                
+                if col_k.button("💥 踢出", use_container_width=True):
+                    conn.execute("DELETE FROM queue WHERE username=?", (target_user,))
+                    st.success(f"已踢出 {target_user}！")
+                    df_q = pd.read_sql_query("SELECT username, status FROM queue", conn)
+                    
+                if col_b.button("🚫 黑單", use_container_width=True):
+                    conn.execute("DELETE FROM queue WHERE username=?", (target_user,))
+                    conn.execute("INSERT OR IGNORE INTO blacklist (username) VALUES (?)", (target_user,))
+                    st.success(f"已黑單 {target_user}！")
+                    df_q = pd.read_sql_query("SELECT username, status FROM queue", conn)
+            
+            df_placeholder.dataframe(df_q, hide_index=True)
+            
             st.write("📜 過去使用紀錄：")
-            st.dataframe(pd.read_sql_query("SELECT username, task_type, timestamp FROM history ORDER BY id DESC LIMIT 20", conn))
-            if st.button("踢出所有人並清空"):
-                conn.execute("DELETE FROM queue"); conn.commit(); st.rerun()
+            st.dataframe(pd.read_sql_query("SELECT username, task_type, timestamp FROM history ORDER BY id DESC LIMIT 20", conn), hide_index=True)
+            
+            if st.button("踢出所有人並清空", use_container_width=True):
+                conn.execute("DELETE FROM queue")
+                st.success("已清空！")
+                df_placeholder.dataframe(pd.DataFrame(), hide_index=True)
             conn.close()
+
+        with st.sidebar.expander("👑 Admin 控制台", expanded=True):
+            render_admin_console()
 
     st.sidebar.write(f"👤 當前帳號: **{st.session_state.username}**")
     if st.sidebar.button("登出 / 離開系統"):
         if not st.session_state.is_admin:
-            conn = sqlite3.connect('queue.db')
+            conn = sqlite3.connect('queue.db', isolation_level=None)
             conn.execute("DELETE FROM queue WHERE username=?", (st.session_state.username,))
-            conn.commit(); conn.close()
+            conn.close()
         st.session_state.username = None
         st.session_state.run_id = None
         st.session_state.report_data = None
@@ -607,7 +666,7 @@ else:
                                  {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
                                  {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4_dt.strftime("%Y-%m-%d")}]
                             tasks.append((l, d1_dt.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4_dt.strftime("%Y-%m-%d")))
-                    conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.commit(); conn.close()
+                    conn = sqlite3.connect('queue.db', isolation_level=None); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.close()
                     
                     st.session_state.search_params = {
                         "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
@@ -654,7 +713,7 @@ else:
                                      {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
                                      {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                                 tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
-                        conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} custom-range)", datetime.now())); conn.commit(); conn.close()
+                        conn = sqlite3.connect('queue.db', isolation_level=None); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} custom-range)", datetime.now())); conn.close()
                         
                         st.session_state.search_params = {
                             "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
@@ -759,7 +818,7 @@ else:
                                          {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{sel_h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                                     tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
                             
-                            conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} custom-range)", datetime.now())); conn.commit(); conn.close()
+                            conn = sqlite3.connect('queue.db', isolation_level=None); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} custom-range)", datetime.now())); conn.close()
                             
                             st.session_state.search_params = {
                                 "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
