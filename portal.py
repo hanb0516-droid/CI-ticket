@@ -24,7 +24,7 @@ else:
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v59.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v60.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db', isolation_level=None)
@@ -46,8 +46,16 @@ if "deep_report_data" not in st.session_state: st.session_state.deep_report_data
 if "deep_report_ref" not in st.session_state: st.session_state.deep_report_ref = 0
 if "search_params" not in st.session_state: st.session_state.search_params = None
 
+try:
+    API_KEYS_LIST = [k.strip() for k in st.secrets["BOOKING_API_KEY"].split(",") if k.strip()]
+    S_SENDER = st.secrets.get("EMAIL_SENDER", "")
+    S_PWD = st.secrets.get("EMAIL_PASSWORD", "")
+    S_RECEIVER = st.secrets.get("EMAIL_RECEIVER", "")
+except Exception:
+    st.error("🚨 缺少 Secrets 設定 (API KEY 或 Email)"); st.stop()
+
 # ==========================================
-# 1. 站點庫定義 (💡 V59.0 史詩級擴充，納入 BER 柏林等全聯程點)
+# 1. 站點庫定義 (包含所有聯程大擴充)
 # ==========================================
 @st.cache_data
 def get_hubs():
@@ -55,7 +63,7 @@ def get_hubs():
         "台灣": {"TPE": "台北桃園", "KHH": "高雄小港", "RMQ": "台中清泉崗"},
         "港澳": {"HKG": "香港", "MFM": "澳門"},
         "東北亞": {"NRT": "東京成田", "HND": "東京羽田", "KIX": "大阪", "NGO": "名古屋", "FUK": "福岡", "CTS": "札幌", "OKA": "沖繩", "ICN": "首爾仁川", "GMP": "首爾金浦", "PUS": "釜山", "SDJ": "仙台", "KOJ": "鹿兒島"},
-        "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "CNX": "清邁", "RGN": "仰光", "DEL": "新德里", "BOM": "孟買"},
+        "東南亞/南亞": {"BKK": "曼谷", "DMK": "曼谷廊曼", "CNX": "清邁", "SIN": "新加坡", "KUL": "吉隆坡", "PEN": "檳城", "SGN": "胡志明市", "HAN": "河內", "DAD": "峴港", "PQC": "富國島", "MNL": "馬尼拉", "CEB": "宿霧", "CGK": "雅加達", "DPS": "峇里島", "PNH": "金邊", "RGN": "仰光", "DEL": "新德里", "BOM": "孟買"},
         "中東/非洲": {"DXB": "杜拜", "IST": "伊斯坦堡", "DOH": "杜哈", "AUH": "阿布達比", "CAI": "開羅", "JNB": "約翰尼斯堡"},
         "西歐/北歐": {"AMS": "阿姆斯特丹", "LHR": "倫敦", "CDG": "巴黎", "FRA": "法蘭克福", "MUC": "慕尼黑", "CPH": "哥本哈根", "ARN": "斯德哥爾摩", "OSL": "奧斯陸", "HEL": "赫爾辛基", "ZRH": "蘇黎世", "BRU": "布魯塞爾", "DUB": "都柏林", "EDI": "愛丁堡", "MAN": "曼徹斯特"},
         "東歐/南歐": {"BER": "柏林勃蘭登堡", "PRG": "布拉格", "VIE": "維也納", "BUD": "布達佩斯", "WAW": "華沙", "FCO": "羅馬", "MXP": "米蘭", "MAD": "馬德里", "BCN": "巴塞隆納", "LIS": "里斯本", "ATH": "雅典", "AGP": "馬拉加", "VCE": "威尼斯", "HAJ": "漢諾威", "STR": "斯圖加特", "NUE": "紐倫堡"},
@@ -259,9 +267,11 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
     SKYTEAM_CODES = {"CI", "AF", "KL", "DL", "KE", "MU", "MF", "VN", "GA", "AM", "AR", "UX", "KQ", "ME", "SV", "RO", "VS", "SK", "AZ"}
     STAR_ALLIANCE_CODES = {"BR", "UA", "AC", "LH", "LX", "OS", "SN", "NH", "OZ", "SQ", "TG", "CA", "ZH", "NZ", "LO", "TK", "MS", "SA", "ET", "CM", "AV", "TP", "A3", "AI"}
     CI_PRIMARY, BR_PRIMARY = {"CI", "AE"}, {"BR", "B7"} 
-    CI_INTERLINE = {"LH", "BA", "OS", "AF", "KL", "DL", "PG", "SK", "UX", "AZ", "CZ", "MU", "MF", "VN", "GA", "KE", "ME", "SV", "RO", "AM", "AR", "KQ"}
-    BR_INTERLINE = {"UA", "AC", "LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "CM", "AV", "TP", "A3", "SK", "PG", "B6", "LO", "TK", "MS", "SA", "ET"}
-    EK_PRIMARY, EK_INTERLINE = {"EK"}, {"EK", "FZ", "QF", "PG", "JL", "MH", "TG", "BR", "CI", "CX", "PR"}
+    
+    # 💡 乾淨安全連程白名單
+    SAFE_CI_PARTNERS = {"KL", "AF", "LH", "OS", "OK", "CZ", "MU", "VN", "SK", "UX"}
+    SAFE_BR_PARTNERS = {"LH", "OS", "LX", "SN", "NH", "OZ", "SQ", "TG", "NZ", "TK", "LO", "A3", "TP", "CM", "AV"}
+    EK_PRIMARY = {"EK"}
 
     async def fetch_with_retry():
         async with sem:
@@ -285,39 +295,37 @@ async def fetch_api(client, sem, task_data, rid, cab, airline_mode, alliance_fla
                                     mk = f.get('carrierInfo', {}).get('marketingCarrier', '')
                                     flight_num = f.get('flightNumber', '')
                                     
-                                    # 💡 D1/D4 絕對純血，D2/D3 彈性聯程(完美相容歐陸轉機直掛並斬斷假聯程)
+                                    # 💡 血統過濾器：D1/D4 嚴格，D2/D3 彈性防鬼影
                                     if airline_mode == "🌸 華航限定 (直營/聯營)":
                                         primaries = SKYTEAM_CODES if alliance_flag else CI_PRIMARY
                                         if op in primaries or mk in primaries: has_primary = True
+                                        
                                         if seg_idx in [0, 3]: 
                                             if op not in primaries and mk not in primaries: all_legs_valid = False
                                         else: 
-                                            if op not in primaries and mk not in primaries and op not in CI_INTERLINE and mk not in CI_INTERLINE: all_legs_valid = False
+                                            if op not in primaries and mk not in primaries and op not in SAFE_CI_PARTNERS and mk not in SAFE_CI_PARTNERS: all_legs_valid = False
                                             
                                     elif airline_mode == "🌳 長榮限定 (直營/聯營)":
                                         primaries = STAR_ALLIANCE_CODES if alliance_flag else BR_PRIMARY
                                         if op in primaries or mk in primaries: has_primary = True
+                                        
                                         if seg_idx in [0, 3]:
                                             if op not in primaries and mk not in primaries: all_legs_valid = False
                                         else:
-                                            if op not in primaries and mk not in primaries and op not in BR_INTERLINE and mk not in BR_INTERLINE: all_legs_valid = False
+                                            if op not in primaries and mk not in primaries and op not in SAFE_BR_PARTNERS and mk not in SAFE_BR_PARTNERS: all_legs_valid = False
                                             
                                     elif airline_mode == "🇦🇪 阿聯酋航空限定 (Emirates)":
                                         primaries = EK_PRIMARY
                                         if op in primaries or mk in primaries: has_primary = True
-                                        if seg_idx in [0, 3]:
-                                            if op not in primaries and mk not in primaries: all_legs_valid = False
-                                        else:
-                                            if op not in primaries and mk not in primaries and op not in EK_INTERLINE and mk not in EK_INTERLINE: all_legs_valid = False
-                                    
+                                        if op not in primaries and mk not in primaries: all_legs_valid = False
                                     else:
                                         primaries = set()
                                     
-                                    # 還原共享班號為直營代碼顯示
+                                    # 💡 洗滌顯示代碼：共享代碼優先顯示主代碼
                                     display_code = mk
                                     if airline_mode != "🌍 無限制航空公司":
-                                        if mk in primaries: display_code = mk
-                                        elif op in primaries: display_code = op
+                                        if op in primaries: display_code = op
+                                        elif mk in primaries: display_code = mk
                                         else: display_code = op if op else mk
                                     else:
                                         display_code = op if op else mk
@@ -616,7 +624,7 @@ else:
             c1, c2 = st.columns(2)
             d2_loc = c1.selectbox("✈️ 從台灣出發地", ALL_CITIES_LIST, index=safe_idx("TPE"))
             d2_date = c1.date_input("📅 出發日期", value=date(2027, 2, 10))
-            d3_loc = c2.selectbox("✈️ 主要目的地", ALL_CITIES_LIST, index=safe_idx("BER")) # 💡 預設可以直接選 BER 囉
+            d3_loc = c2.selectbox("✈️ 主要目的地", ALL_CITIES_LIST, index=safe_idx("BER"))
             d3_date = c2.date_input("📅 回程日期", value=date(2027, 2, 25))
             
             d2o_fix, d2d_fix = d2_loc.split(" ")[0], d3_loc.split(" ")[0]
@@ -625,7 +633,7 @@ else:
             c1, c2 = st.columns(2)
             d2o_loc = c1.selectbox("✈️ D2 出發地", ALL_CITIES_LIST, index=safe_idx("TPE"))
             d2_date = c1.date_input("📅 D2 出發日期", value=date(2027, 2, 10))
-            d2d_loc = c2.selectbox("✈️ D2 目的地", ALL_CITIES_LIST, index=safe_idx("BER")) # 💡 完美自訂包含 BER 的聯程點
+            d2d_loc = c2.selectbox("✈️ D2 目的地", ALL_CITIES_LIST, index=safe_idx("BER"))
             
             c3, c4 = st.columns(2)
             d3o_loc = c3.selectbox("✈️ D3 回程地", ALL_CITIES_LIST, index=safe_idx("PRG"))
@@ -672,7 +680,7 @@ else:
                                  {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
                                  {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4}.AIRPORT", "date": d4_dt.strftime("%Y-%m-%d")}]
                             tasks.append((l, d1_dt.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4_dt.strftime("%Y-%m-%d")))
-                    conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.close()
+                    conn = sqlite3.connect('queue.db', isolation_level=None); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, "Option 1 (Auto Asia)", datetime.now())); conn.close()
                     
                     st.session_state.search_params = {
                         "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
@@ -719,7 +727,7 @@ else:
                                      {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
                                      {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                                 tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
-                        conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} custom-range)", datetime.now())); conn.close()
+                        conn = sqlite3.connect('queue.db', isolation_level=None); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} custom-range)", datetime.now())); conn.close()
                         
                         st.session_state.search_params = {
                             "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
@@ -800,8 +808,8 @@ else:
                     st.markdown(f"<h3 style='color: #ff5252;'>🚀 Step 5: 尋找 {sel_route_pure} 更便宜的時間</h3>", unsafe_allow_html=True)
                     
                     col_d1, col_d4 = st.columns(2)
-                    d1_range_s5 = col_d1.date_input("📅 D1 日期範圍", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date, key="d1_step5")
-                    d4_range_s5 = col_d4.date_input("📅 D4 日期範圍", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, key="d4_step5", help="💡 系統框架原生僅提供『過去(Past)』快捷鍵。請直接點擊日曆上的『起始日』與『結束日』來圈選未來範圍！")
+                    d1_range_s5 = col_d1.date_input("📅 D1 日期範圍 (外站回程)", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date, key="d1_step5")
+                    d4_range_s5 = col_d4.date_input("📅 D4 日期範圍 (外站離去)", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, key="d4_step5", help="💡 系統框架原生僅提供『過去(Past)』快捷鍵。請直接點擊日曆上的『起始日』與『結束日』來圈選未來範圍！")
                     
                     if len(d1_range_s5) == 2 and len(d4_range_s5) == 2:
                         total_est_tasks_s5 = ((d1_range_s5[1] - d1_range_s5[0]).days + 1) * ((d4_range_s5[1] - d4_range_s5[0]).days + 1)
@@ -824,7 +832,7 @@ else:
                                          {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{sel_h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
                                     tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
                             
-                            conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} custom-range)", datetime.now())); conn.commit(); conn.close()
+                            conn = sqlite3.connect('queue.db', isolation_level=None); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} custom-range)", datetime.now())); conn.close()
                             
                             st.session_state.search_params = {
                                 "tasks": tasks, "l_bbb": l_bbb, "email_input": email_input, "rid": rid, "cab": cab,
