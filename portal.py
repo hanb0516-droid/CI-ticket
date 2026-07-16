@@ -13,6 +13,14 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, date
 from itertools import product
 
+# 💡 安全載入 Fragment 裝飾器 (確保獨立渲染，不干擾主搜尋)
+if hasattr(st, "fragment"):
+    fragment_decorator = st.fragment
+elif hasattr(st, "experimental_fragment"):
+    fragment_decorator = st.experimental_fragment
+else:
+    fragment_decorator = lambda f: f
+
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
@@ -75,9 +83,6 @@ def safe_idx(target):
     for i, s in enumerate(ALL_CITIES_LIST):
         if s.startswith(target): return i
     return 0
-
-def get_full_name(code):
-    return f"{code} {AIRPORT_MAP.get(code, '')}".strip()
 
 # ==========================================
 # 2. 核心搜尋與 DataFrame 轉換
@@ -412,13 +417,13 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
 # ==========================================
 # 3. 權限與排隊邏輯
 # ==========================================
-# 💡 V55.0：登入介面採用 st.form，支援 Enter 鍵直接送出
 def login_screen():
     st.markdown("<h1 style='text-align:center;'>✈️ Flight Actuary 外站機票精算系統</h1>", unsafe_allow_html=True)
     st.markdown("<h4 style='text-align:center; color:#888;'>不用懂複雜的航空代碼，告訴我們你要去哪裡，剩下的交給機器人！</h4><br>", unsafe_allow_html=True)
     
     c1, c2, c3 = st.columns([1,2,1])
     with c2:
+        # 💡 V55.0：加入 st.form，支援 Enter 鍵直接登入
         with st.form("login_form"):
             user_input = st.text_input("請輸入您的使用者名稱", placeholder="例如: Kevin")
             submitted = st.form_submit_button("🚀 進入系統", use_container_width=True)
@@ -430,12 +435,12 @@ def login_screen():
                 elif user_input.strip():
                     conn = sqlite3.connect('queue.db')
                     c = conn.cursor()
-                    # 💡 檢查是否在黑名單
+                    
+                    # 💡 檢查是否被黑單，完美偽裝成伺服器斷線錯誤
                     c.execute("SELECT * FROM blacklist WHERE username=?", (user_input.strip(),))
                     if c.fetchone():
                         conn.close()
-                        # 偽裝成連線中斷錯誤
-                        raise RuntimeError("StreamlitAPIException: Connection reset by peer.")
+                        raise RuntimeError("WebSocketConnectionClosed: The connection was closed unexpectedly.")
                         
                     c.execute("SELECT * FROM queue WHERE username=?", (user_input.strip(),))
                     if not c.fetchone():
@@ -471,14 +476,14 @@ def check_queue():
             next_user = next_user_row[0]
             c.execute("UPDATE queue SET status='running', start_time=? WHERE username=?", (time.time(), next_user))
             conn.commit()
-            
+        
     c.execute("SELECT status, start_time FROM queue WHERE username=?", (st.session_state.username,))
     my_status = c.fetchone()
     conn.close()
     
-    # 💡 如果被管理員踢掉（記憶體覺得有登入，但資料庫沒這個人）
+    # 💡 如果被管理員踢掉（資料庫沒這號人物），拋出完美偽裝的底層錯誤
     if my_status is None:
-        raise RuntimeError("StreamlitAPIException: Connection lost. Socket closed.")
+        raise RuntimeError("WebSocketConnectionClosed: The connection was closed unexpectedly.")
         
     if my_status and my_status[0] == 'running':
         time_left = 600 - (time.time() - my_status[1])
@@ -502,33 +507,48 @@ else:
         st.stop()
         
     if st.session_state.is_admin:
-        with st.sidebar.expander("👑 Admin 控制台", expanded=True):
-            # 💡 V55.0：管理員介面強化 (重新整理、踢出、黑單)
-            if st.button("🔄 刷新名單", use_container_width=True): st.rerun()
-            
-            conn = sqlite3.connect('queue.db')
-            df_q = pd.read_sql_query("SELECT username, status FROM queue", conn)
-            st.write("📊 排隊/執行中名單：")
-            st.dataframe(df_q, hide_index=True)
-            
-            if not df_q.empty:
-                target_user = st.selectbox("🎯 選擇目標", df_q['username'].tolist(), label_visibility="collapsed")
-                col_k, col_b = st.columns(2)
-                if col_k.button("💥 踢出", use_container_width=True):
-                    conn.execute("DELETE FROM queue WHERE username=?", (target_user,))
-                    conn.commit()
-                    st.rerun()
-                if col_b.button("🚫 黑單", use_container_width=True):
-                    conn.execute("DELETE FROM queue WHERE username=?", (target_user,))
-                    conn.execute("INSERT OR IGNORE INTO blacklist (username) VALUES (?)", (target_user,))
-                    conn.commit()
-                    st.rerun()
+        # 💡 V55.0：套用 Fragment 技術，操作 Admin 控制台絕不會殺掉右邊正在跑的搜尋！
+        @fragment_decorator
+        def render_admin_console():
+            with st.sidebar.expander("👑 Admin 控制台", expanded=True):
+                if st.button("🔄 刷新名單", use_container_width=True): pass
+                
+                conn = sqlite3.connect('queue.db')
+                df_q = pd.read_sql_query("SELECT username, status FROM queue", conn)
+                
+                st.write("📊 排隊/執行中名單：")
+                df_placeholder = st.empty() # 佔位符，讓踢人後能即時更新表格
+                
+                if not df_q.empty:
+                    target_user = st.selectbox("🎯 選擇目標", df_q['username'].tolist(), label_visibility="collapsed", key="admin_target")
+                    col_k, col_b = st.columns(2)
                     
-            st.write("📜 過去使用紀錄：")
-            st.dataframe(pd.read_sql_query("SELECT username, task_type, timestamp FROM history ORDER BY id DESC LIMIT 20", conn), hide_index=True)
-            if st.button("踢出所有人並清空", use_container_width=True):
-                conn.execute("DELETE FROM queue"); conn.commit(); st.rerun()
-            conn.close()
+                    if col_k.button("💥 踢出", use_container_width=True):
+                        conn.execute("DELETE FROM queue WHERE username=?", (target_user,))
+                        conn.commit()
+                        df_q = pd.read_sql_query("SELECT username, status FROM queue", conn) # 重新獲取資料
+                        st.success(f"已踢出 {target_user}！")
+                        
+                    if col_b.button("🚫 黑單", use_container_width=True):
+                        conn.execute("DELETE FROM queue WHERE username=?", (target_user,))
+                        conn.execute("INSERT OR IGNORE INTO blacklist (username) VALUES (?)", (target_user,))
+                        conn.commit()
+                        df_q = pd.read_sql_query("SELECT username, status FROM queue", conn) # 重新獲取資料
+                        st.success(f"已黑單 {target_user}！")
+                
+                # 更新畫面表格
+                df_placeholder.dataframe(df_q, hide_index=True)
+                
+                st.write("📜 過去使用紀錄：")
+                st.dataframe(pd.read_sql_query("SELECT username, task_type, timestamp FROM history ORDER BY id DESC LIMIT 20", conn), hide_index=True)
+                
+                if st.button("踢出所有人並清空", use_container_width=True):
+                    conn.execute("DELETE FROM queue")
+                    conn.commit()
+                    st.success("已清空！請點擊上方刷新。")
+                conn.close()
+
+        render_admin_console() # 啟動隔離結界
 
     st.sidebar.write(f"👤 當前帳號: **{st.session_state.username}**")
     if st.sidebar.button("登出 / 離開系統"):
