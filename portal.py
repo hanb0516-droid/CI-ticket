@@ -16,7 +16,7 @@ from itertools import product
 # ==========================================
 # 0. 初始化與排隊資料庫
 # ==========================================
-st.set_page_config(page_title="Flight Actuary v50.1 | 外站機票精算系統", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Flight Actuary v51.0 | 外站機票精算系統", page_icon="✈️", layout="wide")
 
 def init_db():
     conn = sqlite3.connect('queue.db')
@@ -76,7 +76,6 @@ def safe_idx(target):
 # ==========================================
 # 2. 核心搜尋與 DataFrame 轉換
 # ==========================================
-# 💡 V50.1 修改：拆分航線為 D1、D2/D3、D4 三個欄位
 def create_dataframe(res):
     if not res: return pd.DataFrame()
     df_data = []
@@ -89,11 +88,9 @@ def create_dataframe(res):
         d3_short = r['d3'][5:].replace('-','/')
         d4_short = r['d4'][5:].replace('-','/')
         
-        # 拆解成三個專屬欄位
         d1_str = f"({d1_short}) {r['h1']} ➔ {r['d2o']}"
         d23_str = f"({d2_short}) {r['d2o']} ➔ {r['d2d']} | ({d3_short}) {r['d3o']} ➔ {r['d3d']}"
         d4_str = f"({d4_short}) {r['d3d']} ➔ {r['h4']}"
-        
         route_pure = f"{r['h1']} ➔ {r['d2o']} ➔ {r['d2d']} ➔ {r['d3d']} ➔ {r['h4']}"
 
         df_data.append({
@@ -111,7 +108,6 @@ def create_dataframe(res):
         })
     return pd.DataFrame(df_data)
 
-# 信件內容也同步切開三個欄位，讓表格排版更清爽
 def generate_table_html(res, core_ref):
     header = "<tr style='background:#333;color:#fff;font-size:16px;'><th>總價(TWD)</th><th>分開買市價</th><th>價差對比</th><th>D1 外站回台</th><th>D2/D3 核心旅程</th><th>D4 外站離台</th><th>航班組合</th></tr>"
     rows = []
@@ -365,8 +361,6 @@ async def run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_mode, all
                 if final_res:
                     temp_sorted = sorted(final_res, key=lambda x: x['total'])[:50]
                     temp_df = create_dataframe(temp_sorted)
-                    
-                    # 💡 即時開獎版也同步套用新欄位與順序
                     live_table.dataframe(
                         temp_df.drop(columns=["勾選", "_h1", "_h4", "_route_pure"]),
                         column_config={
@@ -580,36 +574,48 @@ else:
 
         else:
             st.divider()
-            st.subheader("Step 3: 填寫外站旅程")
+            st.subheader("Step 3: 填寫外站旅程與探索範圍")
             cc1, cc2 = st.columns(2)
             d1_loc = cc1.selectbox("D1 想要從哪裡飛回台灣？", ALL_CITIES_LIST, index=safe_idx("NRT"))
             d4_loc = cc2.selectbox("D4 回台灣後想去哪裡玩？", ALL_CITIES_LIST, index=safe_idx("BKK"))
             
-            st.warning("⚠️ 系統將以您設定的核心日期為基準，自動掃描 **D2 出發前 200 天**、與 **D3 回程後 200 天**，為您找出這 40,000 種組合範圍內最便宜的破盤價！")
+            # 💡 V51.0：加入雙日期區間選擇器
+            st.info("💡 請設定 D1 (外站回台) 與 D4 (外站離台) 的日期搜尋範圍：")
+            col_d1, col_d4 = st.columns(2)
+            d1_range = col_d1.date_input("📅 D1 日期範圍", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date)
+            d4_range = col_d4.date_input("📅 D4 日期範圍", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date)
             
             st.divider()
             st.subheader("Step 4: 確認與執行")
             email_input = st.text_input("📩 搜尋完成後將報告寄至 (必填)：", value=default_email, placeholder="例如: yourname@gmail.com")
             
-            if st.button(f"🚀 展開 40,000 筆深度精算並寄信", type="primary"):
-                st.session_state.report_data = None 
-                st.session_state.deep_report_data = None
-                if not email_input: st.error("🚨 請輸入 Email！")
-                else:
-                    rid = str(uuid.uuid4()); st.session_state.run_id = rid
-                    h1_fix, h4_fix = d1_loc.split(" ")[0], d4_loc.split(" ")[0]
-                    d1_dates = [d2_date - timedelta(days=i) for i in range(200, 0, -1)]
-                    d4_dates = [d3_date + timedelta(days=i) for i in range(1, 201)]
-                    tasks = []
-                    for d1 in d1_dates:
-                        for d4 in d4_dates:
-                            l = [{"fromId": f"{h1_fix}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
-                                 {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
-                                 {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
-                                 {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
-                            tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
-                    conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} 200-days)", datetime.now())); conn.commit(); conn.close()
-                    asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "report_data"))
+            if len(d1_range) == 2 and len(d4_range) == 2:
+                total_est_tasks = ((d1_range[1] - d1_range[0]).days + 1) * ((d4_range[1] - d4_range[0]).days + 1)
+                if st.button(f"🚀 展開 {total_est_tasks:,} 筆深度精算並寄信", type="primary"):
+                    st.session_state.report_data = None 
+                    st.session_state.deep_report_data = None
+                    if not email_input: st.error("🚨 請輸入 Email！")
+                    else:
+                        rid = str(uuid.uuid4()); st.session_state.run_id = rid
+                        h1_fix, h4_fix = d1_loc.split(" ")[0], d4_loc.split(" ")[0]
+                        d1_start, d1_end = d1_range
+                        d4_start, d4_end = d4_range
+                        
+                        d1_dates = [d1_start + timedelta(days=i) for i in range((d1_end - d1_start).days + 1)]
+                        d4_dates = [d4_start + timedelta(days=i) for i in range((d4_end - d4_start).days + 1)]
+                        
+                        tasks = []
+                        for d1 in d1_dates:
+                            for d4 in d4_dates:
+                                l = [{"fromId": f"{h1_fix}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
+                                     {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
+                                     {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
+                                     {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{h4_fix}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
+                                tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
+                        conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Option 2 ({h1_fix}/{h4_fix} custom-range)", datetime.now())); conn.commit(); conn.close()
+                        asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "report_data"))
+            else:
+                st.warning("⚠️ 請選擇完整的起訖日期區間")
 
         # ==========================================
         # 📊 階段 1：主報表展示區 
@@ -627,7 +633,6 @@ else:
                 
             display_df = create_dataframe(display_data)
             
-            # 💡 V50.1：套用完美拆分與欄位寬度配置
             edited_df = st.data_editor(
                 display_df,
                 column_order=["勾選", "總價(TWD)", "分開買市價", "價差對比", "D1 外站回台", "D2/D3 核心旅程", "D4 外站離台", "航班組合"],
@@ -666,33 +671,45 @@ else:
                     
                     st.divider()
                     st.markdown(f"<h3 style='color: #ff5252;'>🚀 Step 5: 尋找 {sel_route_pure} 更便宜的時間</h3>", unsafe_allow_html=True)
-                    st.info("💡 系統已為您鎖定上方勾選的航線組合。按下按鈕後，我們將發動 40,000 筆大數據運算，找出前後 200 天內最便宜的破盤組合！")
                     
-                    if st.button(f"🔥 立即啟動深度探索", type="primary"):
-                        st.session_state.deep_report_data = None
-                        rid = str(uuid.uuid4()); st.session_state.run_id = rid
-                        
-                        d1_dates = [d2_date - timedelta(days=i) for i in range(200, 0, -1)]
-                        d4_dates = [d3_date + timedelta(days=i) for i in range(1, 201)]
-                        
-                        tasks = []
-                        for d1 in d1_dates:
-                            for d4 in d4_dates:
-                                l = [{"fromId": f"{sel_h1}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
-                                     {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
-                                     {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
-                                     {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{sel_h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
-                                tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
-                        
-                        conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} 200-days)", datetime.now())); conn.commit(); conn.close()
-                        asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "deep_report_data"))
+                    # 💡 V51.0：Step 5 雙日期區間選擇器
+                    st.info("💡 請自訂深潛探索的日期範圍 (系統將為您算出範圍內所有組合的破盤價)：")
+                    col_d1, col_d4 = st.columns(2)
+                    d1_range_s5 = col_d1.date_input("📅 D1 日期範圍 (外站回台)", value=(d2_date - timedelta(days=30), d2_date), max_value=d2_date, key="d1_step5")
+                    d4_range_s5 = col_d4.date_input("📅 D4 日期範圍 (外站離台)", value=(d3_date, d3_date + timedelta(days=30)), min_value=d3_date, key="d4_step5")
+                    
+                    if len(d1_range_s5) == 2 and len(d4_range_s5) == 2:
+                        total_est_tasks_s5 = ((d1_range_s5[1] - d1_range_s5[0]).days + 1) * ((d4_range_s5[1] - d4_range_s5[0]).days + 1)
+                        if st.button(f"🔥 立即啟動深度探索 (共 {total_est_tasks_s5:,} 筆組合)", type="primary"):
+                            st.session_state.deep_report_data = None
+                            rid = str(uuid.uuid4()); st.session_state.run_id = rid
+                            
+                            d1_start_s5, d1_end_s5 = d1_range_s5
+                            d4_start_s5, d4_end_s5 = d4_range_s5
+                            
+                            d1_dates = [d1_start_s5 + timedelta(days=i) for i in range((d1_end_s5 - d1_start_s5).days + 1)]
+                            d4_dates = [d4_start_s5 + timedelta(days=i) for i in range((d4_end_s5 - d4_start_s5).days + 1)]
+                            
+                            tasks = []
+                            for d1 in d1_dates:
+                                for d4 in d4_dates:
+                                    l = [{"fromId": f"{sel_h1}.AIRPORT", "toId": f"{d2o_fix}.AIRPORT", "date": d1.strftime("%Y-%m-%d")},
+                                         {"fromId": f"{d2o_fix}.AIRPORT", "toId": f"{d2d_fix}.AIRPORT", "date": d2_date.strftime("%Y-%m-%d")},
+                                         {"fromId": f"{d3o_fix}.AIRPORT", "toId": f"{d3d_fix}.AIRPORT", "date": d3_date.strftime("%Y-%m-%d")},
+                                         {"fromId": f"{d3d_fix}.AIRPORT", "toId": f"{sel_h4}.AIRPORT", "date": d4.strftime("%Y-%m-%d")}]
+                                    tasks.append((l, d1.strftime("%Y-%m-%d"), d2_date.strftime("%Y-%m-%d"), d3_date.strftime("%Y-%m-%d"), d4.strftime("%Y-%m-%d")))
+                            
+                            conn = sqlite3.connect('queue.db'); conn.execute("INSERT INTO history (username, task_type, timestamp) VALUES (?, ?, ?)", (st.session_state.username, f"Step5 ({sel_h1}/{sel_h4} custom-range)", datetime.now())); conn.commit(); conn.close()
+                            asyncio.run(run_portal_hunt(tasks, l_bbb, email_input, rid, cab, airline_filter, alliance_inc, manual_core_price, "deep_report_data"))
+                    else:
+                        st.warning("⚠️ 請選擇完整的起訖日期區間")
 
         # ==========================================
         # 📈 階段 3：Step 5 深度結果展示區 
         # ==========================================
         if st.session_state.deep_report_data:
             st.divider()
-            st.markdown("<h3 style='color: #00e676;'>🏆 第二階段：200天深度探索精算結果</h3>", unsafe_allow_html=True)
+            st.markdown("<h3 style='color: #00e676;'>🏆 第二階段：深度探索精算結果</h3>", unsafe_allow_html=True)
             
             sort_mode_deep = st.radio("💡 深度探索報表排序方式：", ["💰 總價排序 (由便宜到貴)", "📉 價差排序 (由省最多到省最少)"], horizontal=True, key="sort_mode_deep")
             
